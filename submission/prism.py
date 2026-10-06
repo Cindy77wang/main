@@ -603,6 +603,8 @@ def build_risk_model(panel, daily, cfg, diag):
             spec[good] = num[good] / den[good]
             spec = _impute_spec(spec, E, cfg)
             risk[t] = MonthRisk(E, L, spec, ok)
+        if (b + 1) % 12 == 0:
+            _log(f"risk model: block {b + 1}/{len(starts)} ({time.time() - t0:.0f}s)")
     diag["themes"] = pd.concat(theme_rows, ignore_index=True)
     _log(f"risk model: {len(starts)} blocks, {n_themes} themes ({time.time() - t0:.0f}s)")
     return risk
@@ -1031,12 +1033,21 @@ def _rm_cv(Kmat, grid, folds):
     return float(grid[int(np.argmax(sr))])
 
 
-def _signals(X, W, gam, scale):
-    """Characteristics plus random Fourier features, demeaned across stocks, plus a constant."""
-    Z = (X.astype(np.float64) @ W) * (gam[None, :] / scale)
-    S = np.concatenate([X.astype(np.float64), np.sin(Z), np.cos(Z)], axis=1)
-    S -= S.mean(axis=0, keepdims=True)
-    return np.concatenate([S, np.ones((X.shape[0], 1))], axis=1)
+def _signals(X, Wg):
+    """Characteristics plus random Fourier features, demeaned across stocks, plus a constant.
+
+    Wg holds the random directions already multiplied by their bandwidths."""
+    n, d = X.shape
+    P = Wg.shape[1]
+    Xd = X.astype(np.float64)
+    Z = Xd @ Wg
+    S = np.empty((n, d + 2 * P + 1))
+    S[:, :d] = Xd
+    np.sin(Z, out=S[:, d:d + P])
+    np.cos(Z, out=S[:, d + P:d + 2 * P])
+    S[:, :-1] -= S[:, :-1].mean(axis=0, keepdims=True)
+    S[:, -1] = 1.0
+    return S
 
 
 def _unit_vol(w, risk_t):
@@ -1063,7 +1074,8 @@ def build_portfolios(panel, daily, risk, preds, cfg, diag):
     P = int(cfg["sdf_rff"])
     W = rng.standard_normal((d, P))
     gam = np.array([cfg["sdf_gammas"][p % len(cfg["sdf_gammas"])] for p in range(P)])
-    zscale = np.sqrt(d / 12.0)
+    zscale = np.sqrt(d / 12.0)  # ranks have variance 1/12, so omega'x / zscale has unit scale
+    Wg = W * (gam / zscale)[None, :]
     learners = list(cfg["learners"])
     sleeves = ["A0", "A1"] + [f"B_{k}" for k in learners]
     F_hist = {"A0": [], "A1": []}  # (month, managed-portfolio return vector)
@@ -1075,7 +1087,7 @@ def build_portfolios(panel, daily, risk, preds, cfg, diag):
     target_m = cfg["vol_target"] / np.sqrt(12.0)
     lam_v = cfg["vol_lambda"]
 
-    for t in months:
+    for i_t, t in enumerate(months):
         r = panel.rows(t)
         rk = risk[t]
         y = panel.y[r]
@@ -1083,7 +1095,7 @@ def build_portfolios(panel, daily, risk, preds, cfg, diag):
         n = X.shape[0]
         sw = {}  # sleeve -> unit-vol weights at t
         if rk.ok and n >= 5:
-            S = _signals(X, W, gam, zscale)
+            S = _signals(X, Wg)
             var0 = rk.var(S) * DAYS_PER_MONTH
             G = rk.solve(S)
             var1 = (S * G).sum(axis=0) * DAYS_PER_MONTH
@@ -1139,7 +1151,15 @@ def build_portfolios(panel, daily, risk, preds, cfg, diag):
         # Volatility timing: forecast from today's book applied to the past year of daily returns
         scale, vs, vf = _vol_scale(book, panel, daily, rk, t, cfg, target_m, lam_v, scales)
         w_final = book * scale
+        if not np.isfinite(w_final).all():  # degenerate month: never emit non-finite weights
+            _log(f"warning: non-finite weights in month {t // 12}-{t % 12 + 1:02d}; using the fallback book")
+            book = _fallback_weights(preds, r, n)
+            v = rk.var(book) * DAYS_PER_MONTH
+            book = book / np.sqrt(v) if np.isfinite(v) and v > 0 else book
+            w_final = np.nan_to_num(book * target_m, nan=0.0, posinf=0.0, neginf=0.0)
         out_w[r] = w_final
+        if (i_t + 1) % 60 == 0:
+            _log(f"portfolios: through {t // 12}-{t % 12 + 1:02d} ({time.time() - t0:.0f}s)")
         book_rows.append((t, scale, vs, vf, float(np.abs(w_final).sum()), float(w_final.sum()),
                           int((w_final != 0).sum()), float(w_final @ y)))
 
@@ -1211,20 +1231,24 @@ def run_model(chars, features, daily_ret, config=None, diagnostics=False):
     daily = Daily(daily_ret, panel)
     timing.append(("daily", time.time() - t))
     t = time.time()
-    with threadpool_limits(limits=1, user_api="blas"):  # many small regressions
+    # BLAS threads are set explicitly per stage: many small solves are fastest single-threaded,
+    # and an uncapped pool oversubscribes when the container quota is below the host CPU count
+    with threadpool_limits(limits=1, user_api="blas"):
         risk = build_risk_model(panel, daily, cfg, diag)
     timing.append(("risk_model", time.time() - t))
     t = time.time()
-    preds = fit_learners(panel, cfg, diag, n_threads)
+    with threadpool_limits(limits=n_threads, user_api="blas"):
+        preds = fit_learners(panel, cfg, diag, n_threads)
     timing.append(("learners", time.time() - t))
     t = time.time()
-    w = build_portfolios(panel, daily, risk, preds, cfg, diag)
+    with threadpool_limits(limits=1, user_api="blas"):
+        w = build_portfolios(panel, daily, risk, preds, cfg, diag)
     timing.append(("portfolios", time.time() - t))
 
     test = panel.test
     eom_src = chars["eom"].reset_index(drop=True).to_numpy()[panel.src[test]]
     out = pd.DataFrame({"id": panel.ids[test].astype(np.int64), "eom": eom_src,
-                        "w": np.nan_to_num(w[test], nan=0.0).astype(np.float64)})
+                        "w": np.round(w[test].astype(np.float64), 12)})  # 12 decimals: smaller CSV
     if len(out) == 0:
         raise ValueError("no ctff_test rows in chars")
     for key in ("sleeve_returns", "meta_weights", "sdf_zeta", "book", "learner_ic"):

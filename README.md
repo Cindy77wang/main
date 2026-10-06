@@ -58,8 +58,9 @@ documentation PDF.
    python tools/run_local.py --data data/raw --out output/prism --threads 32
    # or on a cluster: sbatch slurm/run_prism.slurm
    ```
-   Estimated from scaled benchmarks: about 2–3 hours on 32 cores (longer on a laptop)
-   and roughly 20–30 GB of RAM. Ask for 64 GB to be safe. The log reports every December
+   Estimated from scaled benchmarks: about 2.5–3.5 hours on 32 cores (at most ~7 hours in
+   the worst case; longer on a laptop) and a peak of about 20 GB of RAM. Ask for 64 GB to
+   be safe. The log reports every December
    refit with per-learner timings.
 5. **Build the documentation** from the run's output (statistics, figures, 5-page PDF):
    ```bash
