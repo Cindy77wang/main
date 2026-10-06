@@ -87,6 +87,9 @@ A small Markdown dialect. Blocks are separated by blank lines.
                                  generated table (booktabs style); perf also takes
                                  layout=wide (two column pairs, short labels),
                                  rows=key,key,... and labels=short|long
+    [[image:relative/path.png width=6.5in caption="..."]]
+                                 static image (path relative to the document source),
+                                 numbered and captioned like a figure
     [[keyfacts stats="sharpe,mean:Return p.a.,max_dd_scaled"]]
                                  a row of headline numbers; KEY:Label overrides a label
     [[pagebreak]]  [[vspace 6pt]]  [[condbreak 2in]] (new page if less space is left)
@@ -156,6 +159,7 @@ from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT  # noqa
 from reportlab.lib.pagesizes import letter  # noqa: E402
 from reportlab.lib.styles import ParagraphStyle  # noqa: E402
 from reportlab.lib.units import cm, inch, mm  # noqa: E402
+from reportlab.lib.utils import ImageReader  # noqa: E402
 from reportlab.pdfbase import pdfmetrics  # noqa: E402
 from reportlab.pdfbase.ttfonts import TTFont  # noqa: E402
 from reportlab.pdfgen import canvas as rl_canvas  # noqa: E402
@@ -1795,7 +1799,7 @@ def parse_length(value: str, text_width: float) -> float:
     return {"in": x * inch, "cm": x * cm, "mm": x * mm, "pt": x, "%": x / 100 * text_width}[unit]
 
 
-def make_canvas_class(footer: str, font: str, pages: list[int]) -> type:
+def make_canvas_class(footer: str, font: str, pages: list[int], watermark: str | None = None) -> type:
     """Canvas that defers page output to stamp 'page x of y' and records the page count."""
 
     class NumberedCanvas(rl_canvas.Canvas):
@@ -1824,6 +1828,21 @@ def make_canvas_class(footer: str, font: str, pages: list[int]) -> type:
             self.drawString(inch, 0.6 * inch, footer)
             self.drawRightString(w - inch, 0.6 * inch, f"{self._pageNumber} / {total}")
             self.restoreState()
+            if watermark:  # diagonal stamp and a banner, so a preview cannot pass for results
+                h = self._pagesize[1]
+                self.saveState()
+                self.setFillColor(rl_colors.HexColor("#C0392B"))
+                self.setFillAlpha(0.13)
+                self.setFont(font, 40)
+                self.translate(w / 2, h / 2)
+                self.rotate(35)
+                self.drawCentredString(0, 0, watermark)
+                self.restoreState()
+                self.saveState()
+                self.setFillColor(rl_colors.HexColor("#C0392B"))
+                self.setFont(font, 8)
+                self.drawCentredString(w / 2, h - 0.55 * inch, watermark)
+                self.restoreState()
 
     return NumberedCanvas
 
@@ -1868,6 +1887,7 @@ class DocBuilder:
         self.section = [0, 0]
         self.counters = {"fig": 0, "tab": 0, "eq": 0}
         self.fig_renders = 0
+        self.source_dir = ROOT / "docs"
 
     # numbering ------------------------------------------------------------------------
     def number(self, blocks: list[Block]) -> None:
@@ -1886,8 +1906,8 @@ class DocBuilder:
                 if b.label:
                     self.refs[f"sec:{b.label.removeprefix('sec:')}"] = (
                         f"{sec[0]}" if b.level == 1 else f"{sec[0]}.{sec[1]}")
-            elif isinstance(b, Directive) and b.kind in ("figure", "table"):
-                kind = "fig" if b.kind == "figure" else "tab"
+            elif isinstance(b, Directive) and b.kind in ("figure", "table", "image"):
+                kind = "tab" if b.kind == "table" else "fig"
                 self.counters[kind] += 1
                 labels = list(b.names) + ([b.opts["label"]] if "label" in b.opts else [])
                 for lab in labels:
@@ -1936,6 +1956,8 @@ class DocBuilder:
             return self.div(b)
         if b.kind == "figure":
             return self.figure(b)
+        if b.kind == "image":
+            return self.image(b)
         if b.kind == "table":
             return self.gen_table(b)
         if b.kind == "keyfacts":
@@ -2059,6 +2081,21 @@ class DocBuilder:
             body.setStyle(self.table_style([("ALIGN", (0, 0), (-1, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                                       ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
                                       ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
+        return [KeepTogether([Spacer(1, 3), body, self.caption("fig", cap), Spacer(1, 8)])]
+
+    def image(self, b: Directive) -> list[Flowable]:
+        """A static image file (PNG/JPG), path relative to the document source; numbered as a figure."""
+        rel = ",".join(b.names) if b.names else ""
+        path = (self.source_dir / rel) if not Path(rel).is_absolute() else Path(rel)
+        w = parse_length(b.opts["width"], self.text_width) if "width" in b.opts else self.text_width
+        cap = b.opts.get("caption", "").replace("{model}", self.ctx.model)
+        if not path.exists():
+            warn(f"image '{rel}' not found; placeholder inserted")
+            body: Flowable = self.placeholder(rel, w, 0.8 * inch)
+        else:
+            iw, ih = ImageReader(str(path)).getSize()
+            h = parse_length(b.opts["height"], self.text_width) if "height" in b.opts else w * ih / iw
+            body = Image(str(path), width=w, height=h)
         return [KeepTogether([Spacer(1, 3), body, self.caption("fig", cap), Spacer(1, 8)])]
 
     def placeholder(self, name: str, w: float, h: float) -> Table:
@@ -2186,12 +2223,13 @@ class DocBuilder:
 
 
 def build_pdf(ctx: Ctx, source: Path, pdf_path: Path, build_dir: Path, config: dict[str, str],
-              dpi: int, max_pages_cli: int | None) -> int:
+              dpi: int, max_pages_cli: int | None, watermark: str | None = None) -> int:
     """Render the document source to pdf_path; returns the page count."""
     meta, text = split_front_matter(source.read_text(encoding="utf-8"))
     text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     blocks = parse_blocks(text.splitlines())
     builder = DocBuilder(ctx, meta, config, build_dir, dpi)
+    builder.source_dir = source.parent
     builder.number(blocks)
     story = builder.title_block() + builder.flowables(blocks)
     pages: list[int] = []
@@ -2202,7 +2240,7 @@ def build_pdf(ctx: Ctx, source: Path, pdf_path: Path, build_dir: Path, config: d
                             topMargin=inch, bottomMargin=inch, title=title,
                             author=meta.get("author", DEFAULT_AUTHOR), subject=meta.get("subtitle", ""),
                             creator="tools/make_report.py (reportlab)", invariant=1)
-    doc.build(story, canvasmaker=make_canvas_class(footer, builder.fonts["body"], pages))
+    doc.build(story, canvasmaker=make_canvas_class(footer, builder.fonts["body"], pages, watermark))
     n = pages[-1] if pages else 0
     limit = max_pages_cli or int(meta.get("max_pages", 5))
     if n > limit:
@@ -2229,6 +2267,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--dpi", type=int, default=300, help="PNG resolution of figures")
     ap.add_argument("--no-pdf", action="store_true", help="statistics and figures only")
     ap.add_argument("--strict", action="store_true", help="exit with status 2 on any warning")
+    ap.add_argument("--watermark", help="stamp every page with this text (e.g. for previews)")
     return ap.parse_args(argv)
 
 
@@ -2268,7 +2307,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         pdf = args.pdf or out / "documentation.pdf"
         pdf.parent.mkdir(parents=True, exist_ok=True)
-        n = build_pdf(ctx, source, pdf, out / "_build", config_dict(diag), args.dpi, args.max_pages)
+        n = build_pdf(ctx, source, pdf, out / "_build", config_dict(diag), args.dpi, args.max_pages,
+                      args.watermark)
         print(f"PDF: {pdf} ({n} pages)")
     if _WARNINGS:
         print(f"{len(_WARNINGS)} warning(s)", file=sys.stderr)
