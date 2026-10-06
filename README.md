@@ -36,6 +36,11 @@ pre-1990 Sharpe ratio from 0.57 to 0.83 and from 0.24 to 0.61, and the test-peri
 ratio from 0.84 to 0.94 and from 1.00 to 1.14. On the same simulated data, replicas of the
 organizers' Markowitz-ML benchmark (2.52 on the real leaderboard) earn only 0.16-0.39.
 
+`tools/digital_twin.py` reproduces the decomposition and draws
+[`docs/figures/digital_twin.png`](docs/figures/digital_twin.png): each layer of PRISM, the
+oracle and the benchmark replicas, in two simulated markets. The documentation includes it
+together with the table of ideas that were tested and rejected.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -46,7 +51,10 @@ organizers' Markowitz-ML benchmark (2.52 on the real leaderboard) earn only 0.16
 | `tools/test_submission.py` | Pre-submission checks: rules scan, output contract, determinism, order invariance, look-ahead truncation test |
 | `tools/make_synthetic_data.py` | Synthetic data in the exact CTF format (full-period and validation-like) |
 | `tools/make_report.py` | Performance statistics, figures and the documentation PDF |
+| `tools/digital_twin.py` | Oracle decomposition in simulated markets with known truth (the design lab) |
 | `docs/documentation.md` | Source text of the documentation (rendered by `make_report.py`) |
+| `docs/figures/` | Digital-twin figure and table included in the documentation |
+| `docs/preview/` | **Preview** of the documentation PDF built from simulated data (watermarked; not results) |
 | `docs/DEV_SPEC.md` | Data formats and the model/tool interfaces |
 | `slurm/run_prism.slurm` | Job script for a 32-core SLURM node (e.g. Yale McCleary/Grace) |
 
@@ -82,9 +90,11 @@ organizers' Markowitz-ML benchmark (2.52 on the real leaderboard) earn only 0.16
    python tools/make_report.py --data data/raw --weights output/prism/prism_weights.csv \
        --diagnostics output/prism/diagnostics --out docs/report --doc-source docs/documentation.md --strict
    ```
-   Every number in the PDF is filled in from the run. Before submitting, re-read the
-   narrative in `docs/documentation.md` against the actual results and adjust the
-   interpretation where needed.
+   Every number in the PDF is filled in from the run; the digital-twin figure comes from
+   `docs/figures/`. Before submitting, re-read the narrative in `docs/documentation.md`
+   against the actual results and adjust the interpretation where needed. Until then,
+   `docs/preview/documentation_PREVIEW_synthetic.pdf` shows the layout, filled in with
+   simulated data (every page is stamped as a preview).
 6. **Optional check of the saved weights file** against the CTF format and coverage:
    ```bash
    python tools/test_submission.py --model submission/prism.py --data data/raw --static-only \

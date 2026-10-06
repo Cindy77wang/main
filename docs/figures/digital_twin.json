@@ -1,0 +1,86 @@
+{
+  "Simulated market 1 (300 stocks)": {
+    "oracle": {
+      "sharpe_pre": 2.279,
+      "sharpe_test": 2.111
+    },
+    "true_mu_prism_risk": {
+      "sharpe_pre": 1.794,
+      "sharpe_test": 1.561
+    },
+    "B_ens": {
+      "sharpe_pre": 0.317,
+      "sharpe_test": 0.485
+    },
+    "A0": {
+      "sharpe_pre": 0.689,
+      "sharpe_test": 0.824
+    },
+    "A1": {
+      "sharpe_pre": 0.858,
+      "sharpe_test": 0.922
+    },
+    "book_raw": {
+      "sharpe_pre": 0.764,
+      "sharpe_test": 0.972
+    },
+    "book": {
+      "sharpe_pre": 0.827,
+      "sharpe_test": 0.944
+    },
+    "markowitz_ml": {
+      "sharpe_pre": 0.099,
+      "sharpe_test": 0.288
+    },
+    "factor_ml": {
+      "sharpe_pre": 0.507,
+      "sharpe_test": 0.381
+    },
+    "one_over_n": {
+      "sharpe_pre": 0.309,
+      "sharpe_test": 0.406
+    }
+  },
+  "Simulated market 2 (500 stocks)": {
+    "oracle": {
+      "sharpe_pre": 2.039,
+      "sharpe_test": 2.458
+    },
+    "true_mu_prism_risk": {
+      "sharpe_pre": 1.232,
+      "sharpe_test": 1.632
+    },
+    "B_ens": {
+      "sharpe_pre": 0.24,
+      "sharpe_test": 0.868
+    },
+    "A0": {
+      "sharpe_pre": 0.325,
+      "sharpe_test": 0.86
+    },
+    "A1": {
+      "sharpe_pre": 0.681,
+      "sharpe_test": 1.014
+    },
+    "book_raw": {
+      "sharpe_pre": 0.554,
+      "sharpe_test": 1.113
+    },
+    "book": {
+      "sharpe_pre": 0.605,
+      "sharpe_test": 1.136
+    },
+    "markowitz_ml": {
+      "sharpe_pre": -0.177,
+      "sharpe_test": 0.242
+    },
+    "factor_ml": {
+      "sharpe_pre": -0.241,
+      "sharpe_test": 0.339
+    },
+    "one_over_n": {
+      "sharpe_pre": 0.256,
+      "sharpe_test": 0.554
+    }
+  }
+}

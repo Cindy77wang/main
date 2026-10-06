@@ -21,6 +21,7 @@ Usage:
     python tools/make_synthetic_data.py --mode full --out data/synthetic/full --truth
     python tools/digital_twin.py --data data/synthetic/full [--data DIR2 ...] --out docs/figures
         [--preds DIR/preds.npz --raw-xgb DIR/preds.npz]   # optional: reuse learner forecasts
+    python tools/digital_twin.py --out docs/figures --replot  # redraw from digital_twin.csv
 
 Writes <out>/digital_twin.csv, digital_twin.json and digital_twin.png/.pdf. Running the
 learners takes ~10-30 minutes per world on a laptop; --preds reuses forecasts from an earlier
@@ -159,35 +160,45 @@ def figure(results, out):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
     from make_report import AXIS, GRID, INK, INK_2, INK_MUTED, MPL_RC, OTHER, SLOTS
 
     accent, light_accent = SLOTS[0], "#9cc2ee"
     colors = {"ceiling": INK_MUTED, "prism": light_accent, "prism_main": accent, "bench": OTHER}
     worlds = list(results)
+    lo = min(0.0, min(results[w][["sharpe_test", "sharpe_pre"]].min().min() for w in worlds)) - 0.1
+    hi = max(results[w][["sharpe_test", "sharpe_pre"]].max().max() for w in worlds) + 0.4
     with plt.rc_context(MPL_RC):
-        fig, axes = plt.subplots(1, len(worlds), figsize=(6.5, 2.75), sharey=True, squeeze=False)
+        fig, axes = plt.subplots(1, len(worlds), figsize=(6.5, 2.3), sharey=True, sharex=True,
+                                 squeeze=False)
         for ax, w in zip(axes[0], worlds):
             df = results[w].iloc[::-1].reset_index(drop=True)
             y = np.arange(len(df))
             ax.barh(y, df["sharpe_test"], height=0.62, color=[colors[g] for g in df["group"]],
                     edgecolor="white", linewidth=1.0, zorder=2)
             ax.scatter(df["sharpe_pre"], y, s=16, facecolor="white", edgecolor=INK, linewidth=0.9,
-                       zorder=3, label="pre-test (1957-1989)")
-            for yi, v in zip(y, df["sharpe_test"]):
-                ax.text(max(v, 0) + 0.04, yi, f"{v:.2f}", va="center", ha="left", fontsize=6.5, color=INK_2)
+                       zorder=3)
+            for yi, v, p in zip(y, df["sharpe_test"], df["sharpe_pre"]):  # label clear of the circle
+                ax.text(max(v, p, 0) + 0.09, yi, f"{v:.2f}", va="center", ha="left", fontsize=6.5,
+                        color=INK_2)
             ax.axvline(0, color=AXIS, lw=0.8, zorder=1)
             ax.grid(axis="x", color=GRID, lw=0.6, zorder=0)
+            ax.grid(axis="y", visible=False)
             ax.set_axisbelow(True)
             ax.set_title(w, fontsize=7.5, loc="left")
-            ax.set_xlabel("Annualized Sharpe ratio, test period (bars) and pre-test (circles)", fontsize=6.5)
-            ax.set_xlim(min(0, df[["sharpe_test", "sharpe_pre"]].min().min()) - 0.1,
-                        df[["sharpe_test", "sharpe_pre"]].max().max() + 0.45)
+            ax.set_xlim(lo, hi)
             for sep in (2.5, 7.5):  # boundaries between benchmarks | PRISM | ceilings
-                ax.axhline(sep, color=GRID, lw=0.8, ls=(0, (2, 2)), zorder=1)
+                ax.axhline(sep, color=AXIS, lw=0.6, ls=(0, (2, 2)), zorder=1)
         axes[0][0].set_yticks(np.arange(len(ROWS)))
         axes[0][0].set_yticklabels([lab for _, lab, _ in ROWS][::-1], fontsize=6.8)
-        axes[0][0].legend(loc="lower right", fontsize=6, frameon=False)
-        fig.tight_layout(w_pad=1.2)
+        handles = [Patch(facecolor=accent, label="Test period, 1990-2023 (bar; value shown)"),
+                   Line2D([], [], ls="", marker="o", ms=4, mfc="white", mec=INK, mew=0.9,
+                          label="Pre-test validation period (circle)")]
+        fig.legend(handles=handles, loc="upper center", ncol=2, fontsize=6.5, frameon=False,
+                   bbox_to_anchor=(0.6, 1.0))
+        fig.supxlabel("Annualized Sharpe ratio at unit ex-ante volatility", fontsize=6.8, x=0.6)
+        fig.tight_layout(w_pad=1.2, rect=(0, 0, 1, 0.94))
         for ext in ("png", "pdf"):
             fig.savefig(out / f"digital_twin.{ext}", dpi=300)
         plt.close(fig)
@@ -195,15 +206,23 @@ def figure(results, out):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", type=Path, action="append", required=True, help="synthetic dataset with truth")
+    ap.add_argument("--data", type=Path, action="append", help="synthetic dataset with truth")
     ap.add_argument("--name", action="append", help="display name per --data (default: folder name)")
     ap.add_argument("--preds", type=Path, action="append", help="cached learner forecasts per --data")
     ap.add_argument("--raw-xgb", type=Path, action="append", help="cached raw-target XGBoost forecasts")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--model", type=Path, default=ROOT / "submission" / "prism.py")
     ap.add_argument("--threads", type=int, default=2)
+    ap.add_argument("--replot", action="store_true", help="redraw the figure from <out>/digital_twin.csv")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    if args.replot:
+        table = pd.read_csv(args.out / "digital_twin.csv")
+        figure({w: g.reset_index(drop=True) for w, g in table.groupby("world", sort=False)}, args.out)
+        print(f"figure: {args.out / 'digital_twin.png'}")
+        return
+    if not args.data:
+        ap.error("--data is required (unless --replot)")
     P = load_model(args.model)
     results = {}
     for i, d in enumerate(args.data):
