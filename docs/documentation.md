@@ -7,7 +7,7 @@ max_pages: 5
 ---
 
 ::: abstract
-PRISM is a monthly long-short portfolio of liquid US stocks, built to maximize the out-of-sample Sharpe ratio on the JKP Common Task Framework (CTF) data. It estimates the conditional tangency portfolio $w_t \propto \Sigma_t^{-1}\mu_t$ in two complementary ways. The first predicts and then optimizes: an ensemble of four machine-learning forecasts of $\mu_t$ is combined with a Barra-style risk model $\Sigma_t$. The second optimizes directly: a random-feature stochastic discount factor (SDF) learns the Sharpe-maximizing combination of thousands of characteristic-managed portfolios. A non-negative meta-portfolio weights the three sleeves, and a volatility-timing overlay sets the leverage. Every design decision was made in a *digital twin*, simulated markets in the exact CTF format whose true tangency portfolio is known, never on the CTF test period. Over the {{stat:months}}-month test period, PRISM earned a Sharpe ratio of **{{stat:sharpe}}** (95% CI {{stat:sharpe_ci_low}} to {{stat:sharpe_ci_high}}).
+PRISM is a monthly long-short portfolio of US stocks that maximizes the out-of-sample Sharpe ratio on the JKP Common Task Framework (CTF) data. It estimates the conditional tangency portfolio $w_t \propto \Sigma_t^{-1}\mu_t$ in two complementary ways. The first predicts and then optimizes: an ensemble of four machine-learning forecasts of $\mu_t$ is combined with a Barra-style risk model $\Sigma_t$. The second optimizes directly: a random-feature stochastic discount factor (SDF) learns the Sharpe-maximizing combination of thousands of characteristic-managed portfolios. A non-negative meta-portfolio weights the three sleeves, and a volatility-timing overlay sets the leverage. Every design decision was made in a *digital twin*, simulated markets in the exact CTF format whose true tangency portfolio is known, never on the CTF test period. Over the {{stat:months}}-month test period, PRISM earned a Sharpe ratio of **{{stat:sharpe}}** (95% CI {{stat:sharpe_ci_low}} to {{stat:sharpe_ci_high}}).
 :::
 
 [[keyfacts stats="sharpe:Sharpe ratio,mean:Return p.a.,sd:Volatility p.a.,max_dd_scaled:Max DD at 10% vol,capm_ew.alpha_t:CAPM alpha t-stat"]]
@@ -21,11 +21,13 @@ PRISM is a monthly long-short portfolio of liquid US stocks, built to maximize t
 - **Designed in a digital twin.** Simulated CTF markets with a known truth show how much Sharpe ratio each layer loses. A change was adopted only if it raised the pre-1990 Sharpe ratio in two of them (Section {{sec:twin}}).
 :::
 
-[[figure:cumret width=6.5in height=2.1in caption="Cumulative excess return (log scale) of PRISM and its sleeves, and the equal-weighted market scaled to the same volatility, over the test period."]]
+[[figure:cumret width=6.5in height=1.8in caption="Cumulative excess return (log scale) of PRISM and its sleeves, and the equal-weighted market scaled to the same volatility, over the test period."]]
 
 # Problem and design
 
-The CTF scores the annualized Sharpe ratio of monthly returns $\sum_i w_{i,t}\,r_{i,t+1}$ from December 1989 to November 2023. Leverage and short sales are free, and trading costs are ignored. The ex-ante optimal answer is therefore the conditional tangency portfolio. The statistical problem is to estimate $\mu_t$ and $\Sigma_t$ well enough that $\Sigma_t^{-1}\mu_t$ survives out of sample. PRISM follows three principles. *Rotate by risk*: signals become portfolios through an explicit covariance model, not through rank sorts. *Use complexity, with shrinkage*: rich nonlinear models are controlled by cross-validated ridge penalties [Kelly, Malamud and Zhou 2024; Didisheim, Ke, Kelly and Malamud 2024]. *Diversify across model families and time the leverage*: the sleeves' average pairwise correlation is {{stat:sleeve_corr_avg}}, and volatility is predictable while expected returns barely move with it [Moreira and Muir 2017].
+The CTF scores the annualized Sharpe ratio of monthly returns from December 1989 to November 2023, ignoring trading costs; the ex-ante optimal portfolio is the conditional tangency portfolio.
+
+The statistical problem is to estimate $\mu_t$ and $\Sigma_t$ well enough that $\Sigma_t^{-1}\mu_t$ survives out of sample. PRISM follows three principles. *Rotate by risk*: signals become portfolios through an explicit covariance model, not through rank sorts. *Use complexity, with shrinkage*: rich nonlinear models are controlled by cross-validated ridge penalties [Kelly, Malamud and Zhou 2024; Didisheim, Ke, Kelly and Malamud 2024]. *Diversify across model families and time the leverage*: the sleeves' average pairwise correlation is {{stat:sleeve_corr_avg}}, and volatility is predictable while expected returns barely move with it [Moreira and Muir 2017].
 
 **Data and validation protocol.** The model uses only the CTF files: {{stat:n_features}} characteristics and next-month excess returns of about 2,000 stocks per month, plus daily returns. Each month, every characteristic is ranked across stocks onto $[-0.5, 0.5]$, and missing values are set to the median, zero. Nothing is selected or referenced by name. Every component is refit each December on a fixed calendar, using only labels whose return month has ended and daily returns dated on or before the portfolio date. Refitting starts in the 1950s, as soon as five years of data exist, so **1957–1989 is a genuine pseudo-out-of-sample validation period**. All tuning happens inside each training window; the remaining constants were fixed in advance from the cited literature. The code passes replicas of the CTF's tests (determinism, invariance to input order and dtypes, and truncation of later data, with earlier weights bit-identical) and a stricter test that replaces the last month's future returns with noise.
 
@@ -61,7 +63,9 @@ Three lessons shaped PRISM. *The risk model is half the battle*: even with the t
 | Learner forecasts as extra SDF columns | Let the SDF weight the learners | −0.02 to −0.16 | Rejected |
 | 6,000 instead of 3,000 random features | Virtue of complexity | +0.02 (under 0.5 s.e.) | Rejected |
 | Statistical factors added to the risk model | Residual factor structure | Oracle hedge 1.48 → 1.51 | Rejected |
-| About 250 meta-combination and overlay variants | Windows, shrinkage, decays | Within noise | Rejected |
+| Shrink the ensemble where learners disagree | Trust agreement | +0.00 / +0.00 at best | Rejected |
+| Leverage timed by the opportunity set | Time-varying Sharpe ratio | ≤ +0.04 even with the truth | Rejected |
+| About 250 meta and overlay variants | Windows, shrinkage, decays | Within noise | Rejected |
 Table: Design decisions in the digital twin. Each idea was implemented, re-run independently and judged only by the book's pre-1990 Sharpe ratio in both markets. The neural SDF was rejected although it raised the simulated test-period Sharpe ratio (+0.12 / +0.04). {#tab:twin}
 
 # Results
