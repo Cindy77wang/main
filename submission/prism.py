@@ -13,19 +13,25 @@ month leaves earlier weights unchanged.
    missing values become 0 (the cross-sectional median). All provided features are used;
    there is no hand selection (Rule 2).
 2. Risk model. A Barra-style factor model, re-specified every December. Its factors are
-   the market, the Fama-French 12 industries, and characteristic "themes" found by
-   hierarchical clustering of the average cross-sectional correlation matrix of the
-   ranked characteristics. Daily ridge cross-sectional regressions give factor returns
-   and residuals. The factor covariance is an EWMA (half-lives of 504 days for
-   correlations and 84 for variances, as in MSCI Barra USE4S). Specific variances are an
-   EWMA of squared residuals with an 84-day half-life; stocks without enough history are
-   imputed from their exposures.
+   the market, the Fama-French 12 industries, and every ranked characteristic
+   (standardized within the month), as in the organizers' Markowitz-ML Barra model.
+   Characteristic "themes" (hierarchical clustering of the average cross-sectional
+   correlation matrix of the ranked characteristics) are reported as diagnostics and can
+   replace the characteristics as factors (risk_char_factors = False). Daily ridge
+   cross-sectional regressions give factor returns and residuals. The factor covariance
+   is an EWMA (half-lives of 504 days for correlations and 84 for variances, as in MSCI
+   Barra USE4S). Specific variances are an EWMA of squared residuals with an 84-day
+   half-life; stocks without enough history are imputed from their exposures.
 3. Return learners, refit every December on a rolling 20-year window with a time-ordered
    validation block: ridge regression, XGBoost, a feed-forward network (NumPy), and an
    LSTM over each stock's 12-month trajectory of characteristic principal components
-   (NumPy).
+   (NumPy). XGBoost learns GLS residual returns: each month's returns net of the risk
+   model's factor exposures, per unit of specific volatility, i.e. the standardized
+   diversifiable alpha that inv(Sigma) can harvest; the others learn z-scored raw returns.
 4. Sleeves, i.e. candidate efficient portfolios, each scaled to unit ex-ante volatility:
-   * B-<learner>: the Markowitz portfolio inv(Sigma_t) mu_hat_t for each learner.
+   * B: the Markowitz portfolio inv(Sigma_t) mu_hat_t on the equal-weight combination of
+     the learners' z-scored forecasts; a standardized-alpha forecast is first put back in
+     return units by the specific volatility (alpha = IC x volatility x score).
    * A0 / A1: random-feature SDFs. Random Fourier features of the characteristics define
      thousands of managed portfolios, used raw (A0) or rotated by inv(Sigma_t) (A1).
      Their weights come from ridge-regularized Markowitz on past managed-portfolio
@@ -69,6 +75,7 @@ CONFIG = {
     "risk_min_industry": 5,
     "risk_theme_months": 60,
     "risk_max_themes": 13,  # the 13 themes of Jensen, Kelly and Pedersen (2023)
+    "risk_char_factors": True,  # every characteristic is a factor (else the themes are)
     "risk_idio_floor_q": 0.05,
     "risk_stat_factors": 0,  # statistical factors from residuals (hybrid model); 0 = off
     # Return learners
@@ -77,6 +84,10 @@ CONFIG = {
     "learn_val_months": 36,
     "learn_val_frac": 0.25,
     "target_winsor": 0.01,
+    # Learners trained on GLS residual returns (see _residual_returns); the others learn
+    # z-scored raw returns
+    "learn_resid": ("xgb",),
+    "b_sleeves": "ens",  # "ens": one B sleeve on the combined forecast; "each": one per learner
     "ridge_grid": (1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0, 1e3),
     "xgb_depths": (3, 6),
     "xgb_eta": 0.1,
@@ -470,6 +481,36 @@ def _theme_scores(X, labels, signs):
     return np.where(sd > 1e-12, (T - T.mean(axis=0)) / np.where(sd > 1e-12, sd, 1.0), 0.0)
 
 
+def _zcols(T):
+    """Columns standardized to mean 0 and unit variance; constant columns become 0."""
+    T = T - T.mean(axis=0)
+    sd = T.std(axis=0)
+    return np.where(sd > 1e-12, T / np.where(sd > 1e-12, sd, 1.0), 0.0)
+
+
+def _day_regressions(E, Rm, lam, min_n):
+    """Daily cross-sectional ridge regressions of returns Rm (days x n) on exposures E (n x K).
+
+    Returns factor returns (days x K) and residuals (days x n), NaN where unavailable. Days
+    with missing returns are fitted on the stocks with returns if there are at least min_n."""
+    K = E.shape[1]
+    F = np.full((Rm.shape[0], K), np.nan)
+    Res = np.full(Rm.shape, np.nan)
+    full = ~np.isnan(Rm).any(axis=1)
+    if full.any():
+        G = E.T @ E + lam * E.shape[0] * np.eye(K)
+        F[full] = np.linalg.solve(G, E.T @ Rm[full].T).T
+        Res[full] = Rm[full] - F[full] @ E.T
+    for j in np.flatnonzero(~full):
+        v = ~np.isnan(Rm[j])
+        if v.sum() < min_n:
+            continue
+        Ev = E[v]
+        F[j] = np.linalg.solve(Ev.T @ Ev + lam * v.sum() * np.eye(K), Ev.T @ Rm[j, v])
+        Res[j, v] = Rm[j, v] - Ev @ F[j]
+    return F, Res
+
+
 def build_risk_model(panel, daily, cfg, diag):
     """Monthly factor risk model; returns {month: MonthRisk} for every panel month."""
     t0 = time.time()
@@ -484,6 +525,8 @@ def build_risk_model(panel, daily, cfg, diag):
             if s <= m < e:
                 block_of[m] = b
     corr_cache = {}
+    reg_cache = {}  # (month, industries) -> daily regressions, reused across blocks
+    char_f = bool(cfg["risk_char_factors"])
     risk = {}
     theme_rows = []
     hl_c, hl_v, hl_s = cfg["risk_hl_corr"], cfg["risk_hl_var"], cfg["risk_hl_idio"]
@@ -506,28 +549,37 @@ def build_risk_model(panel, daily, cfg, diag):
         cnt = np.bincount(panel.ind[panel.rows(s)], minlength=12)
         inds = [k for k in range(12) if cnt[k] >= cfg["risk_min_industry"]]
 
+        n_style = d if char_f else labels.max() + 1
+
         def exposures(m):
             r = panel.rows(m)
             n = r.stop - r.start
-            E = np.empty((n, 1 + len(inds) + labels.max() + 1))
+            E = np.empty((n, 1 + len(inds) + n_style))
             E[:, 0] = 1.0
             ind = panel.ind[r]
             for j, k in enumerate(inds):
                 E[:, 1 + j] = ind == k
-            E[:, 1 + len(inds):] = _theme_scores(panel.X[r], labels, signs)
+            if char_f:
+                E[:, 1 + len(inds):] = _zcols(panel.X[r].astype(np.float64))
+            else:
+                E[:, 1 + len(inds):] = _theme_scores(panel.X[r], labels, signs)
             return E
 
         # Daily regressions over the covariance window of the block's first month
         de_first = daily.me[s]
         de_last = daily.me[block_months[-1]]
         day_lo = max(0, de_first - n_cov + 1)
-        K = 1 + len(inds) + labels.max() + 1
+        K = 1 + len(inds) + n_style
+        # Ridge identifies the characteristic factors, so a partial day needs enough stocks
+        # for the market and industry factors only
+        min_n = 1 + len(inds) + 5 if char_f else K + 5
         n_days = max(de_last - day_lo + 1, 0)
         FR = np.full((n_days, K), np.nan)
         # Residuals are needed only for the specific-risk window of the block's months
         res_lo = max(day_lo, de_first - n_idio + 1)
         RES = np.full((max(de_last - res_lo + 1, 0), len(panel.uid)), np.nan, dtype=np.float32)
         exp_cache = {}
+        first_e = None
         for e in months:
             if e > block_months[-1]:
                 break
@@ -539,30 +591,29 @@ def build_risk_model(panel, daily, cfg, diag):
             if z < a:
                 continue
             r = panel.rows(e)
-            E = exposures(e)
-            if e in block_months:
-                exp_cache[e] = E
             codes = panel.code[r]
-            Rm = daily.R[a:z + 1][:, codes].astype(np.float64)
-            lam = cfg["risk_ridge"]
-            full = ~np.isnan(Rm).any(axis=1)
-            if full.any():
-                G = E.T @ E + lam * E.shape[0] * np.eye(K)
-                f = np.linalg.solve(G, E.T @ Rm[full].T).T
-                FR[a - day_lo + np.flatnonzero(full)] = f
-                keep = a + np.flatnonzero(full) >= res_lo
-                if keep.any():
-                    rows_full = np.flatnonzero(full)[keep]
-                    RES[np.ix_(a - res_lo + rows_full, codes)] = Rm[rows_full] - f[keep] @ E.T
-            for j in np.flatnonzero(~full):
-                v = ~np.isnan(Rm[j])
-                if v.sum() < K + 5:
-                    continue
-                Ev = E[v]
-                f = np.linalg.solve(Ev.T @ Ev + lam * v.sum() * np.eye(K), Ev.T @ Rm[j, v])
-                FR[a - day_lo + j] = f
-                if a + j >= res_lo:
-                    RES[a - res_lo + j, codes[v]] = Rm[j, v] - Ev @ f
+            first_e = e if first_e is None else first_e
+            key = (e, tuple(inds))
+            if char_f and key in reg_cache and e not in block_months:
+                a0, Fm, Resm = reg_cache[key]
+            else:
+                E = exposures(e)
+                if e in block_months:
+                    exp_cache[e] = E
+                # With characteristic factors the exposures of month e do not depend on the
+                # block, so the whole return month is regressed once and reused by later blocks
+                a0 = daily.me[e] + 1 if char_f else a
+                z0 = daily.last_day_on_or_before(int(_month_end_day(e + 1))) if char_f else z
+                Rm = daily.R[a0:z0 + 1][:, codes].astype(np.float64)
+                Fm, Resm = _day_regressions(E, Rm, cfg["risk_ridge"], min_n)
+                if char_f:
+                    reg_cache[key] = (a0, Fm, Resm.astype(np.float32))
+            FR[a - day_lo:z - day_lo + 1] = Fm[a - a0:z - a0 + 1]
+            k0 = max(a, res_lo)
+            if z >= k0:
+                RES[k0 - res_lo:z - res_lo + 1, codes] = Resm[k0 - a0:z - a0 + 1]
+        for key in [k for k in reg_cache if first_e is None or k[0] < first_e]:
+            del reg_cache[key]  # later blocks start their windows later
 
         for t in block_months:
             r = panel.rows(t)
@@ -685,6 +736,41 @@ def _zscore_target(y, month, months, starts, q):
         sd = v.std()
         z[a:b] = v / sd if sd > 0 else 0.0
     return z
+
+
+def _wls_residual(v, rk, lam):
+    """Residual of v after a ridge regression on the exposures weighted by 1/specific variance."""
+    E = rk.E
+    n, K = E.shape
+    wv = 1.0 / rk.spec
+    Ew = E * (wv / wv.mean())[:, None]
+    f = np.linalg.solve(Ew.T @ E + lam * n * np.eye(K), Ew.T @ v)
+    return v - E @ f
+
+
+def _residual_returns(panel, risk, cfg):
+    """GLS learning target: month-m returns net of the month-m factor exposures, per unit of
+    specific volatility.
+
+    The cross-section of raw returns is dominated by common factor shocks (market, industry,
+    style), and the priced part of a raw-return forecast loads on factors that inv(Sigma)
+    hedges away in the B sleeve. Regressing each month's realized returns on the risk model's
+    exposures E_m (weighted least squares with weights 1/spec and the risk model's ridge) and
+    dividing the residual by the specific volatility leaves the diversifiable part of returns
+    on a homoskedastic scale, so a learner fits the standardized alpha alpha_i / sigma_i (the
+    residual-return / information-ratio framework of Grinold and Kahn, 2000). E_m and spec_m
+    are known at m, and the residual of month m uses the return realized at m+1, exactly like
+    the raw label; every month is computed on its own, so truncation leaves it unchanged.
+    """
+    out = np.zeros(len(panel.y))
+    lam = cfg["risk_ridge"]
+    for m in panel.months:
+        r = panel.rows(m)
+        rk = risk[int(m)]
+        if r.stop - r.start < rk.E.shape[1] + 5:
+            continue
+        out[r] = _wls_residual(panel.y[r], rk, lam) / np.sqrt(DAYS_PER_MONTH * rk.spec)
+    return out
 
 
 def _month_ic(pred, y, bounds):
@@ -883,11 +969,19 @@ def _lag_index(panel, L):
     return out
 
 
-def fit_learners(panel, cfg, diag, n_threads):
-    """Out-of-sample predictions of each learner, refit every December; dict name -> (n_rows,) array."""
+def fit_learners(panel, cfg, diag, n_threads, risk=None):
+    """Out-of-sample predictions of each learner, refit every December; dict name -> (n_rows,) array.
+
+    Learners in cfg["learn_resid"] predict standardized alphas (see _residual_returns)."""
     t0 = time.time()
     months = [int(m) for m in panel.months]
     yz = _zscore_target(panel.y, panel.month, panel.months, panel.starts, cfg["target_winsor"])
+    yr = None
+    if any(k in cfg["learn_resid"] for k in cfg["learners"]):
+        if risk is None:
+            raise ValueError("learn_resid needs the risk model")
+        yr = _zscore_target(_residual_returns(panel, risk, cfg), panel.month, panel.months,
+                            panel.starts, cfg["target_winsor"])
     preds = {k: np.full(len(panel.month), np.nan, dtype=np.float64) for k in cfg["learners"]}
     lag_index = _lag_index(panel, int(cfg["lstm_len"])) if "lstm" in cfg["learners"] else None
     refits = [m for m in months if m % 12 == 11]
@@ -905,12 +999,13 @@ def fit_learners(panel, cfg, diag, n_threads):
         pr = slice(panel.rows(pred_m[0]).start, panel.rows(pred_m[-1]).stop)
         pr_blocks = [panel.rows(m) for m in pred_m]
         va_bounds = [(panel.rows(m).start - va.start, panel.rows(m).stop - va.start) for m in va_m]
-        X, y = panel.X, yz
+        X = panel.X
         year = R // 12
         step = {}
         for name in cfg["learners"]:
             t1 = time.time()
             rng = _seed(cfg, 100 + list(cfg["learners"]).index(name), year)
+            y = yr if name in cfg["learn_resid"] else yz
             if name == "ridge":
                 p = _ridge_fit_predict(X, y, tr, va, al, pr_blocks, va_bounds, cfg)
             elif name == "xgb":
@@ -1095,6 +1190,19 @@ def _unit_vol(w, risk_t):
     return w / np.sqrt(v) if np.isfinite(v) and v > 1e-300 else None
 
 
+def _learner_mus(preds, r, rk, cfg, learners):
+    """Expected-return vectors for inv(Sigma), one per learner with a usable forecast in rows r.
+    Each forecast is z-scored across stocks; a standardized-alpha forecast (learn_resid) is put
+    back in return units by the specific volatility."""
+    mus = {}
+    for k in learners:
+        p = preds[k][r]
+        if np.isfinite(p).all() and p.std() > 0:
+            z = (p - p.mean()) / p.std()
+            mus[k] = z * np.sqrt(rk.spec) if k in cfg["learn_resid"] else z
+    return mus
+
+
 def _meta_weights(R, cfg):
     K = R.shape[1]
     R = R[np.isfinite(R).all(axis=1)]
@@ -1117,7 +1225,8 @@ def build_portfolios(panel, daily, risk, preds, cfg, diag):
     zscale = np.sqrt(d / 12.0)  # ranks have variance 1/12, so omega'x / zscale has unit scale
     Wg = W * (gam / zscale)[None, :]
     learners = list(cfg["learners"])
-    sleeves = ["A0", "A1"] + [f"B_{k}" for k in learners]
+    ens = cfg["b_sleeves"] == "ens"
+    sleeves = ["A0", "A1"] + (["B_ens"] if ens else [f"B_{k}" for k in learners])
     F_hist = {"A0": [], "A1": []}  # (month, managed-portfolio return vector)
     zeta = {"A0": None, "A1": None}
     sret = {s: {} for s in sleeves}  # month -> realized sleeve return
@@ -1155,13 +1264,13 @@ def build_portfolios(panel, daily, risk, preds, cfg, diag):
                     w = _unit_vol(M @ b, rk)
                     if w is not None:
                         sw[name] = w
-            for k in learners:
-                mu = preds[k][r]
-                if np.isfinite(mu).all() and mu.std() > 0:
-                    mu = (mu - mu.mean()) / mu.std()
-                    w = _unit_vol(rk.solve(mu), rk)
-                    if w is not None:
-                        sw[f"B_{k}"] = w
+            mus = _learner_mus(preds, r, rk, cfg, learners)
+            if ens and mus:  # forecast combination: equal-weight average of the standardized forecasts
+                mus = {"ens": np.mean([m / m.std() for m in mus.values()], axis=0)}
+            for k, mu in mus.items():
+                w = _unit_vol(rk.solve(mu), rk)
+                if w is not None:
+                    sw[f"B_{k}"] = w
             # Managed-portfolio returns realized over (t, t+1]: used only from t+1 on
             for name in ("A0", "A1"):
                 F_hist[name].append((t, mats[name].T @ y))
@@ -1278,7 +1387,7 @@ def run_model(chars, features, daily_ret, config=None, diagnostics=False):
     timing.append(("risk_model", time.time() - t))
     t = time.time()
     with threadpool_limits(limits=n_threads, user_api="blas"):
-        preds = fit_learners(panel, cfg, diag, n_threads)
+        preds = fit_learners(panel, cfg, diag, n_threads, risk)
     timing.append(("learners", time.time() - t))
     t = time.time()
     with threadpool_limits(limits=1, user_api="blas"):

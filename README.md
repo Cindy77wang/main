@@ -7,19 +7,34 @@ weights that aim to maximize the out-of-sample Sharpe ratio.
 
 ## The model in one paragraph
 
-All 402 characteristics are ranked within each month. A Barra-style risk model, rebuilt
-every December, combines the market, FF12 industries and characteristic *themes* found by
-hierarchical clustering. Four return learners (ridge, XGBoost, a feed-forward network and
-an LSTM over each stock's 12-month characteristic trajectory) are refit every December on a
-rolling 20-year window, strictly out of sample. Their forecasts become Markowitz sleeves
-`inv(Sigma) mu`. Two more sleeves are random-feature SDFs à la Didisheim, Ke, Kelly and
-Malamud: thousands of random Fourier features of the characteristics define managed
-portfolios, raw or rotated by `inv(Sigma)`, which are combined by ridge-regularized
-Markowitz with cross-validated shrinkage. A non-negative Sharpe-maximizing meta-portfolio
-weights the six sleeves using their past out-of-sample returns. Finally, the book is scaled
-to a 10% volatility target forecast from its synthetic daily returns. The full description
-is in the module docstring of [`submission/prism.py`](submission/prism.py) and in the
-documentation PDF.
+All characteristics are ranked within each month. A Barra-style risk model, re-estimated
+every December, uses the market, FF12 industries and every characteristic as factors. That
+is the organizers' Markowitz-ML specification; clustered characteristic themes are kept as
+a diagnostic. Four return learners (ridge, XGBoost, a feed-forward network and an LSTM over
+each stock's 12-month characteristic trajectory) are refit every December on a rolling
+20-year window, strictly out of sample. XGBoost learns residual returns net of the risk
+factors, per unit of specific volatility, so it targets the alpha that hedging keeps. The
+learners' forecasts are averaged into one Markowitz sleeve `inv(Sigma) mu`. Two more sleeves
+are random-feature SDFs in the style of Didisheim, Ke, Kelly and Malamud: thousands of random
+Fourier features of the characteristics define managed portfolios, raw or rotated by
+`inv(Sigma)`, which are combined by ridge-regularized Markowitz with cross-validated
+shrinkage. A non-negative Sharpe-maximizing meta-portfolio weights the three sleeves by their
+past out-of-sample returns. Finally, the book is scaled to a 10% volatility target forecast
+from its synthetic daily returns. The full description is in the module docstring of
+[`submission/prism.py`](submission/prism.py) and in the documentation PDF.
+
+## How the design was chosen
+
+The CTF data was never used to make design choices. Everything was developed on simulated
+markets in the exact CTF format whose true expected returns and covariances are known
+(`tools/make_synthetic_data.py`). An oracle decomposition measured how much Sharpe ratio each
+layer loses relative to the true tangency portfolio. Candidate changes were then tested in
+parallel and kept only if they raised the **pre-1990** Sharpe ratio in **two independently
+simulated markets** and survived an independent re-run. In those simulations the adopted
+changes (all-characteristic risk model, residual-return XGBoost, ensemble sleeve) lifted the
+pre-1990 Sharpe ratio from 0.57 to 0.83 and from 0.24 to 0.61, and the test-period Sharpe
+ratio from 0.84 to 0.94 and from 1.00 to 1.14. On the same simulated data, replicas of the
+organizers' Markowitz-ML benchmark (2.52 on the real leaderboard) earn only 0.16-0.39.
 
 ## Repository layout
 
@@ -58,9 +73,9 @@ documentation PDF.
    python tools/run_local.py --data data/raw --out output/prism --threads 32
    # or on a cluster: sbatch slurm/run_prism.slurm
    ```
-   Estimated from scaled benchmarks: about 2.5–3.5 hours on 32 cores (at most ~7 hours in
-   the worst case; longer on a laptop) and a peak of about 20 GB of RAM. Ask for 64 GB to
-   be safe. The log reports every December
+   Estimated from scaled benchmarks: about 3–4 hours on 32 cores (at most ~8 hours in the
+   worst case; longer on a laptop) and a peak of about 30–35 GB of RAM (the 415-factor risk
+   model is stored for every month). Ask for 128 GB to be safe. The log reports every December
    refit with per-learner timings.
 5. **Build the documentation** from the run's output (statistics, figures, 5-page PDF):
    ```bash
@@ -103,8 +118,8 @@ documentation PDF.
 * The risk model follows the Barra USE4S-style specification used in the organizers'
   benchmark models (Minimum Variance and Markowitz-ML in
   [theisij/common-task-framework-SDF](https://github.com/theisij/common-task-framework-SDF)),
-  re-implemented in Python. It differs in using clustered characteristic themes instead of
-  all 402 raw characteristics as factors.
+  re-implemented in Python, with all characteristics and the FF12 industries as factors as
+  in their specification.
 * Public leaderboard submissions
   ([Hemasrikar/jkp-ctf-portfolio-models](https://github.com/Hemasrikar/jkp-ctf-portfolio-models))
   were studied for ideas. The volatility-targeting overlay is the idea we took from them;

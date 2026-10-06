@@ -198,7 +198,8 @@ MARKET = INK_2
 DIVERGING = LinearSegmentedColormap.from_list(
     "blue_red", ["#a32626", "#e34948", "#f0efec", "#3987e5", "#104281"])
 SLEEVE_LABELS = {"A0": "SDF-RF raw", "A1": "SDF-RF rotated", "B_ridge": "Ridge",
-                 "B_xgb": "XGBoost", "B_mlp": "MLP", "B_lstm": "LSTM", "B_lgbm": "LightGBM"}
+                 "B_xgb": "XGBoost", "B_mlp": "MLP", "B_lstm": "LSTM", "B_lgbm": "LightGBM",
+                 "B_ens": "Learner ensemble"}
 LEARNER_LABELS = {"ridge": "Ridge", "xgb": "XGBoost", "mlp": "MLP", "lstm": "LSTM",
                   "lgbm": "LightGBM"}
 PCT_KEYS = {"mean", "sd", "max_dd", "max_dd_scaled", "turnover", "hit_rate", "worst_month",
