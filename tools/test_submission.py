@@ -29,8 +29,9 @@ Static checks (run once):
     With ``--pypi`` (network), each pin must exist on PyPI, allow Python 3.13 and ship a
     CPython 3.13 linux x86_64 wheel; vulnerabilities PyPI/OSV lists are WARN.
 
-Dynamic checks (per data dir; the module is re-imported fresh for every run and every run
-gets deep copies of the inputs, so neither module state nor input mutation leaks between runs):
+Dynamic checks (per data dir). The model file is read once at start-up (sha256 printed) and
+every run executes that source as a fresh module on deep copies of the inputs, so neither
+module state, input mutation nor an edit of the file mid-check leaks between runs:
   1. Output contract (Rules 11, 12, 5): columns exactly id, eom, w; id integer; w float and
      finite; eom a date (datetime.date or midnight datetime64) serialized as YYYY-MM-DD; no
      NaN; no duplicated (id, eom); exactly the ctff_test (id, eom) set; non-zero gross
@@ -62,6 +63,7 @@ import ast
 import contextlib
 import datetime as dt
 import errno
+import hashlib
 import importlib.metadata
 import importlib.util
 import io
@@ -564,9 +566,9 @@ def pin_vs_local(dist: str, version: str, tops: list[str], installed: dict[str, 
     return f"{dist}=={version} not installed locally" + (f"; {', '.join(providers)}" if providers else "")
 
 
-def check_file_basics(report: Report, path: Path, what: str) -> str | None:
+def check_file_basics(report: Report, path: Path, what: str, data: bytes | None = None) -> str | None:
     """Rule 13 checks; returns the decoded text if it is valid UTF-8."""
-    data = path.read_bytes()
+    data = path.read_bytes() if data is None else data
     report.check(len(data) < MAX_SOURCE_BYTES, f"Rule 13: {what} under 1 MB", f"{len(data) / 1e6:.3f} MB")
     report.check(b"\x00" not in data, f"Rule 13: {what} has no binary (NUL) bytes")
     try:
@@ -685,13 +687,14 @@ def check_pins_on_pypi(report: Report, pins: dict[str, str]) -> None:
         report.check(True, "Rule 16: no known vulnerabilities listed on PyPI/OSV for the pins")
 
 
-def run_static_checks(report: Report, model: Path, req_path: Path, pypi: bool = False) -> bool:
+def run_static_checks(report: Report, src: ModelSource, req_path: Path, pypi: bool = False) -> bool:
     """Static checks; returns False if the file cannot be parsed (dynamic checks pointless)."""
+    model = src.path
     report.section(f"Static checks: {model}")
     report.info(f"Python {sys.version.split()[0]}, pandas {pd.__version__}, numpy {np.__version__}")
     if sys.version_info[:2] != (3, 13):
         report.warn("Rule 8: checks run on Python 3.13 (the CTF runtime)", sys.version.split()[0])
-    source = check_file_basics(report, model, "model script")
+    source = check_file_basics(report, model, "model script", src.data)
     if source is None:
         return False
     try:
@@ -782,21 +785,44 @@ def load_inputs(data_dir: Path) -> Inputs:
     return Inputs(*(pd.read_parquet(data_dir / DATA_FILES[k]) for k in ("chars", "features", "daily_ret")))
 
 
-def load_model(path: Path) -> ModuleType:
-    """Import the model file as a fresh module named after its stem.
+@dataclass(frozen=True)
+class ModelSource:
+    """The model file as read once at start-up, so every run executes the same code even if
+    the file is edited on disk while the checks run."""
+
+    path: Path
+    data: bytes
+
+    @classmethod
+    def read(cls, path: Path) -> ModelSource:
+        return cls(path, path.read_bytes())
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.data).hexdigest()
+
+    def changed_on_disk(self) -> bool:
+        return not self.path.is_file() or self.path.read_bytes() != self.data
+
+
+def load_model(src: ModelSource) -> ModuleType:
+    """Execute the cached source as a fresh module named after the file's stem.
 
     Registered in sys.modules (with its directory on sys.path) so that joblib/loky workers
     can unpickle functions defined in it by reference.
     """
-    name = path.stem
+    name = src.path.stem
     existing = sys.modules.get(name)
-    if name in sys.stdlib_module_names or (existing is not None and getattr(existing, "__file__", None) != str(path)):
+    if name in sys.stdlib_module_names or (existing is not None
+                                           and getattr(existing, "__file__", None) != str(src.path)):
         raise RuntimeError(f"model module name {name!r} clashes with an existing module; rename the file")
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
+    spec = importlib.util.spec_from_file_location(name, src.path)
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
+    # dont_inherit: the model must not pick up this file's `from __future__` flags
+    code = compile(src.data, str(src.path), "exec", dont_inherit=True)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    exec(code, module.__dict__)  # noqa: S102 - running the model under test is the point
     return module
 
 
@@ -822,21 +848,21 @@ def network_blocked(attempts: list[str]) -> Iterator[None]:
             setattr(socket.socket, name, fn)
 
 
-def run_model(model: Path, inputs: Inputs, label: str) -> RunResult:
+def run_model(src: ModelSource, inputs: Inputs, label: str) -> RunResult:
     """Fresh import + one main() call on the given inputs (which the model may consume)."""
     res = RunResult(label)
     print(f"-- run [{label}]: rows chars {len(inputs.chars):,}, daily_ret {len(inputs.daily_ret):,}", flush=True)
     with network_blocked(res.net_attempts):
         t0 = time.perf_counter()
         try:
-            module = load_model(model)
+            module = load_model(src)
             t0 = time.perf_counter()
             res.output = module.main(inputs.chars, inputs.features, inputs.daily_ret)
         except (Exception, SystemExit) as e:  # noqa: BLE001 - report any model failure
             traceback.print_exception(e, file=sys.stdout)
             frames = traceback.extract_tb(e.__traceback__)
-            where = next((f for f in reversed(frames) if f.filename == str(model)), None)
-            loc = f" at {model.name}:{where.lineno} in {where.name}()" if where else ""
+            where = next((f for f in reversed(frames) if f.filename == str(src.path)), None)
+            loc = f" at {src.path.name}:{where.lineno} in {where.name}()" if where else ""
             res.error = f"{type(e).__name__}: {e}{loc}"
         finally:
             res.seconds = time.perf_counter() - t0
@@ -1083,7 +1109,7 @@ def mutation_detail(before: pd.DataFrame, after: pd.DataFrame) -> str | None:
 @dataclass
 class DirContext:
     report: Report
-    model: Path
+    model: ModelSource
     pristine: Inputs
     expected: pd.DataFrame  # ctff_test (id, eom) keys, keyed form
     returns: pd.DataFrame  # keyed (id, eom) + r for the test rows
@@ -1137,7 +1163,8 @@ def check_comparison(ctx: DirContext, base: RunResult, res: RunResult, label: st
     return ctx.report.check(cmp.ok, label, cmp.detail())
 
 
-def test_data_dir(report: Report, model: Path, data_dir: Path, args: argparse.Namespace) -> pd.DataFrame | None:
+def test_data_dir(report: Report, model: ModelSource, data_dir: Path,
+                  args: argparse.Namespace) -> pd.DataFrame | None:
     """All dynamic checks on one data dir; returns the base run's keyed weights (or None)."""
     report.section(f"Dynamic checks: {data_dir}")
     missing = [f for f in DATA_FILES.values() if not (data_dir / f).exists()]
@@ -1305,12 +1332,17 @@ def main(argv: list[str] | None = None) -> int:
     if not args.model.is_file():
         report.check(False, "model file exists", str(args.model))
         return report.exit_code()
-    parsed = run_static_checks(report, args.model, args.requirements, args.pypi)
+    src = ModelSource.read(args.model)
+    report.info(f"{args.model.name} sha256 {src.sha256[:16]}: every check uses this version of the file")
+    parsed = run_static_checks(report, src, args.requirements, args.pypi)
     first_base = None
     if parsed and not args.static_only:
         sys.path.insert(0, str(args.model.parent))
-        bases = [test_data_dir(report, args.model, d.resolve(), args) for d in args.data]
+        bases = [test_data_dir(report, src, d.resolve(), args) for d in args.data]
         first_base = bases[0]
+        if src.changed_on_disk():
+            report.warn("model file unchanged during the checks",
+                        f"{args.model} changed on disk; all runs used the version read at start")
     elif not args.static_only:
         report.skip("dynamic checks", "model script did not pass the basic static checks")
     if args.weights:

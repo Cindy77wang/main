@@ -812,6 +812,7 @@ def fit_learners(panel, cfg, diag, n_threads):
         va_bounds = [(panel.rows(m).start - va.start, panel.rows(m).stop - va.start) for m in va_m]
         X, y = panel.X, yz
         year = R // 12
+        step = {}
         for name in cfg["learners"]:
             t1 = time.time()
             rng = _seed(cfg, 100 + list(cfg["learners"]).index(name), year)
@@ -826,9 +827,11 @@ def fit_learners(panel, cfg, diag, n_threads):
             else:
                 raise ValueError(name)
             preds[name][pr] = p
-            timing[name] += time.time() - t1
-        _log(f"learners refit {R // 12}-12: train {len(tr_m)}m, val {len(va_m)}m, "
-             f"predict {len(pred_m)}m ({time.time() - t0:.0f}s total)")
+            step[name] = time.time() - t1
+            timing[name] += step[name]
+        _log(f"learners refit {R // 12}-12: train {len(tr_m)}m ({tr.stop - tr.start:,} rows), "
+             f"val {len(va_m)}m, predict {len(pred_m)}m | "
+             + " ".join(f"{k} {v:.0f}s" for k, v in step.items()) + f" | {time.time() - t0:.0f}s total")
     rows = []
     for name in cfg["learners"]:
         for m in months:
