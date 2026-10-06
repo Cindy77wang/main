@@ -108,7 +108,7 @@ CONFIG = {
     "sdf_window": 360,
     "sdf_min_months": 60,
     "sdf_folds": 5,
-    "sdf_zeta_grid": tuple(10.0 ** np.arange(-5.0, 3.01, 0.5)),
+    "sdf_zeta_grid": tuple(10.0 ** np.arange(-5.0, 4.01, 0.5)),
     # Meta-combination and volatility timing
     "meta_window": 240,
     "meta_min_months": 36,

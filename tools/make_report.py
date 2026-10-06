@@ -548,6 +548,12 @@ def sleeve_stats(diag: dict[str, pd.DataFrame], ts: pd.DataFrame,
     if "book" in diag and "ret" in diag["book"]:
         bk = diag["book"].set_index("eom").sort_index()
         out["book_pre"] = sharpe_block(bk.loc[bk.index < test_start, "ret"], MIN_MONTHS_SHARPE)
+        if "scale" in bk:
+            # The meta-combined book before the volatility-timing overlay (ablation)
+            raw = bk["ret"] / bk["scale"].where(bk["scale"] > 0)
+            out["book_unscaled"] = {
+                "sharpe_pre": sharpe_block(raw[raw.index < test_start], MIN_MONTHS_SHARPE)["sharpe"],
+                "sharpe_test": sharpe_block(raw[raw.index >= test_start], MIN_MONTHS_SHARPE)["sharpe"]}
     return out
 
 
@@ -643,6 +649,12 @@ def compute_all_stats(pf: pd.DataFrame, rets: pd.DataFrame, diag: dict[str, pd.D
     stats["zeta"] = zeta_stats(diag)
     if "timing" in diag:
         stats["runtime_minutes"] = float(diag["timing"]["seconds"].sum() / 60)
+        stats["runtime_hours"] = stats["runtime_minutes"] / 60
+    if "themes" in diag and len(diag["themes"]):
+        th = diag["themes"]
+        last = th[th["refit_eom"] == th["refit_eom"].max()]
+        stats["n_features"] = int(th["feature"].nunique())
+        stats["n_themes_last"] = int(last.loc[last["cluster"] >= 0, "cluster"].nunique())
     return stats, ts
 
 
@@ -856,6 +868,10 @@ def sleeves_table(stats: dict[str, Any]) -> TableData | None:
     combo = stats.get("sleeve_ew_combo", {})
     body.append(["Equal-weight sleeves", fmt(combo.get("sharpe_pre"), ".2f"),
                  fmt(combo.get("sharpe_test"), ".2f"), "", ""])
+    raw = stats.get("book_unscaled", {})
+    if raw:
+        body.append(["Meta book, no vol. timing", fmt(raw.get("sharpe_pre"), ".2f"),
+                     fmt(raw.get("sharpe_test"), ".2f"), "", ""])
     pre = (stats.get("book_pre") or {}).get("sharpe")
     body.append([f"{stats['model']} book", fmt(pre, ".2f"), stat_text(stats, "sharpe"), "100%", "1.00"])
     return TableData(["Sleeve", "SR pre-test", "SR test", "Avg. weight", "Corr. book"], body,
@@ -1143,6 +1159,10 @@ def fig_leverage(ctx: Ctx, fig: Figure, narrow: bool) -> bool:
     a.plot(x, bk["vol_synth"], color=SLOTS[0], lw=0.9, label="forecast: EWMA of daily book returns")
     a.plot(x, bk["vol_fm"], color=SLOTS[1], lw=0.9, label="forecast: factor risk model")
     a.set_title("(a) Forecast vol., unscaled book", fontsize=7, loc="left")
+    vols = pd.concat([bk["vol_synth"], bk["vol_fm"]]).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(vols) > 20:  # a few start-up months must not flatten the panel
+        lo, hi = np.nanquantile(vols, [0.005, 0.995])
+        a.set_ylim(max(0.0, lo * 0.9), hi * 1.1)
     _pct_axis(a)
     b = axs[0, 1]
     b.plot(x, bk["scale"], color=INK_2, lw=0.9, label="_scale")

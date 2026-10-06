@@ -31,7 +31,8 @@ documentation PDF.
 | `tools/test_submission.py` | Pre-submission checks: rules scan, output contract, determinism, order invariance, look-ahead truncation test |
 | `tools/make_synthetic_data.py` | Synthetic data in the exact CTF format (full-period and validation-like) |
 | `tools/make_report.py` | Performance statistics, figures and the documentation PDF |
-| `docs/documentation.md` | Source text of the documentation |
+| `docs/documentation.md` | Source text of the documentation (rendered by `make_report.py`) |
+| `docs/DEV_SPEC.md` | Data formats and the model/tool interfaces |
 | `slurm/run_prism.slurm` | Job script for a 32-core SLURM node (e.g. Yale McCleary/Grace) |
 
 ## How to reproduce
@@ -39,26 +40,39 @@ documentation PDF.
 1. **Environment** (Python 3.13, the CTF runtime):
    ```bash
    uv venv --python 3.13 .venv && source .venv/bin/activate
-   uv pip install -r submission/requirements.txt pyarrow matplotlib reportlab
+   uv pip install -r submission/requirements.txt pyarrow       # the model
+   uv pip install matplotlib==3.11.2 reportlab==5.0.1           # the report tools only
    ```
 2. **Data.** Download `ctff_chars.parquet`, `ctff_features.parquet` and
    `ctff_daily_ret.parquet` (see [dataset access](https://jkpfactors.com/ctf/dataset-access))
    into `data/raw/`. The data is licensed through WRDS and is git-ignored.
-3. **Run the model** (about 3–6 hours on 32 cores; peak memory well under 64 GB):
+3. **Check the code first** on synthetic data in the exact CTF format (minutes):
+   ```bash
+   python tools/make_synthetic_data.py --mode validation --out data/synthetic/validation --daily-lead-months 0
+   python tools/test_submission.py --model submission/prism.py --data data/synthetic/validation
+   ```
+   This runs the rule scan, the output contract, determinism, input-order/dtype invariance,
+   the organizers' truncation (look-ahead) test and a stricter label-leakage test.
+4. **Run the model** on the real data:
    ```bash
    python tools/run_local.py --data data/raw --out output/prism --threads 32
-   # or: sbatch slurm/run_prism.slurm
+   # or on a cluster: sbatch slurm/run_prism.slurm
    ```
-4. **Check the submission** against the CTF rules (fast checks on synthetic data first):
-   ```bash
-   python tools/make_synthetic_data.py --mode validation --out data/synthetic/validation
-   python tools/test_submission.py --model submission/prism.py \
-       --requirements submission/requirements.txt --data data/synthetic/validation
-   ```
-5. **Build the documentation** from the run's output:
+   Estimated from scaled benchmarks: about 2–3 hours on 32 cores (longer on a laptop)
+   and roughly 20–30 GB of RAM. Ask for 64 GB to be safe. The log reports every December
+   refit with per-learner timings.
+5. **Build the documentation** from the run's output (statistics, figures, 5-page PDF):
    ```bash
    python tools/make_report.py --data data/raw --weights output/prism/prism_weights.csv \
-       --diagnostics output/prism/diagnostics --out docs/report --doc-source docs/documentation.md
+       --diagnostics output/prism/diagnostics --out docs/report --doc-source docs/documentation.md --strict
+   ```
+   Every number in the PDF is filled in from the run. Before submitting, re-read the
+   narrative in `docs/documentation.md` against the actual results and adjust the
+   interpretation where needed.
+6. **Optional check of the saved weights file** against the CTF format and coverage:
+   ```bash
+   python tools/test_submission.py --model submission/prism.py --data data/raw --static-only \
+       --weights output/prism/prism_weights.csv
    ```
 
 ## Submission checklist (jkpfactors.com/ctf/submit)
@@ -68,7 +82,7 @@ documentation PDF.
 | Model script | `submission/prism.py` |
 | Portfolio weights | `output/prism/prism_weights.csv` |
 | Dependencies | `submission/requirements.txt` |
-| Documentation | `docs/report/prism_documentation.pdf` |
+| Documentation | `docs/report/documentation.pdf` |
 
 ## Compliance with the CTF rules
 
