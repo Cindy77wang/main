@@ -65,6 +65,7 @@ Three lessons shaped PRISM. *The risk model is half the battle*: even with the t
 | Statistical factors added to the risk model | Residual factor structure | Oracle hedge 1.48 → 1.51 | Rejected |
 | Shrink the ensemble where learners disagree | Trust agreement | +0.00 / +0.00 at best | Rejected |
 | Leverage timed by the opportunity set | Time-varying Sharpe ratio | ≤ +0.04 even with the truth | Rejected |
+| XGBoost tree leaves as extra SDF signals | Trees as managed portfolios | −0.02 / −0.02 | Rejected |
 | About 250 meta and overlay variants | Windows, shrinkage, decays | Within noise | Rejected |
 Table: Design decisions in the digital twin. Each idea was implemented, re-run independently and judged only by the book's pre-1990 Sharpe ratio in both markets. The neural SDF was rejected although it raised the simulated test-period Sharpe ratio (+0.12 / +0.04). {#tab:twin}
 
