@@ -11,3 +11,6 @@ data/
 # Run outputs (weights, diagnostics, logs)
 output/
 logs/
+
+# Report build intermediates
+docs/report/_build/

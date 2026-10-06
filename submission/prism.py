@@ -47,6 +47,7 @@ from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.optimize import nnls
 from scipy.spatial.distance import squareform
 from scipy.stats import rankdata
+from threadpoolctl import threadpool_limits
 
 # Configuration. Every value is fixed a priori, from the cited literature or as a
 # conventional default; none was tuned on the test period. Hyperparameters that are
@@ -103,7 +104,7 @@ CONFIG = {
     "lstm_subsample": 0.5,
     # Random-feature SDF sleeves (Didisheim, Ke, Kelly and Malamud, 2024)
     "sdf_rff": 3000,
-    "sdf_gammas": (0.5, 1.0, 2.0),
+    "sdf_gammas": (0.5, 1.0, 2.0, 3.0),  # spans the bandwidths of JKMP (2024) and DKKM (2024)
     "sdf_window": 360,
     "sdf_min_months": 60,
     "sdf_folds": 5,
@@ -279,7 +280,7 @@ class Panel:
         self.src = order  # positions in the original chars
         self.month = month[order]
         self.ids = ids[order]
-        self.y = np.nan_to_num(y[order], nan=0.0)
+        self.y = np.where(np.isfinite(y[order]), y[order], 0.0)
         self.test = _as_bool(chars["ctff_test"])[order]
         sic = chars["sic"] if "sic" in chars.columns else pd.Series(np.full(len(chars), np.nan))
         self.ind = ff12_codes(sic)[order].astype(np.int8)
@@ -406,8 +407,28 @@ def _month_corr(X):
     return cov * inv[:, None] * inv[None, :]
 
 
-def _themes(C, n_themes):
-    """Hierarchical clustering of features on 1 - |corr| (average linkage); returns (labels, signs)."""
+def _themes(C, n_themes, min_avail=0.5):
+    """Hierarchical clustering of the features available in the window; returns (labels, signs).
+
+    The diagonal of the window-average correlation matrix is the share of months in which a
+    feature varies across stocks. Features available in fewer than half of the months (e.g.
+    before a data item exists) get label -1 and no theme, so they neither occupy theme slots
+    nor, when numerous, force all features into a single cluster.
+    """
+    d = C.shape[0]
+    live = np.flatnonzero(np.clip(np.diag(C), 0.0, 1.0) >= min_avail)
+    if len(live) < 2:
+        live = np.arange(d)
+    n_eff = int(min(n_themes, max(1, len(live) // 3)))
+    lab_l, sg_l = _cluster(C[np.ix_(live, live)], n_eff)
+    labels = np.full(d, -1, dtype=np.int64)
+    signs = np.ones(d)
+    labels[live], signs[live] = lab_l, sg_l
+    return labels, signs
+
+
+def _cluster(C, n_themes):
+    """Average-linkage clustering on 1 - |corr|, canonical labels, sign alignment."""
     d = C.shape[0]
     if d == 1 or n_themes <= 1:
         signs = np.ones(d)
@@ -600,7 +621,7 @@ def _impute_spec(spec, E, cfg):
     else:
         fill = np.full(len(spec), 0.02 ** 2)
     out = np.where(good, spec, fill)
-    floor = np.quantile(out[good], cfg["risk_idio_floor_q"]) if good.sum() >= 20 else np.median(out)
+    floor = np.quantile(spec[good], cfg["risk_idio_floor_q"]) if good.sum() >= 2 else 1e-8
     return np.maximum(out, max(floor, 1e-8))
 
 
@@ -852,10 +873,12 @@ def fit_learners(panel, cfg, diag, n_threads):
                 p = _ridge_fit_predict(X, y, tr, va, al, pr_blocks, va_bounds, cfg)
             elif name == "xgb":
                 p = _xgb_fit_predict(X, y, tr, va, al, pr_blocks, cfg, rng, n_threads)
-            elif name == "mlp":
-                p = _mlp_fit_predict(X, y, tr, va, al, pr_blocks, cfg, rng)
+            elif name == "mlp":  # small mini-batch products: single-threaded BLAS is faster
+                with threadpool_limits(limits=1, user_api="blas"):
+                    p = _mlp_fit_predict(X, y, tr, va, al, pr_blocks, cfg, rng)
             elif name == "lstm":
-                p = _lstm_fit_predict(panel, y, tr, va, al, pr_blocks, lag_index, cfg, rng)
+                with threadpool_limits(limits=1, user_api="blas"):
+                    p = _lstm_fit_predict(panel, y, tr, va, al, pr_blocks, lag_index, cfg, rng)
             else:
                 raise ValueError(name)
             preds[name][pr] = p
@@ -908,6 +931,9 @@ def _ridge_fit_predict(X, y, tr, va, al, pr_blocks, va_bounds, cfg):
 
 
 def _xgb_fit_predict(X, y, tr, va, al, pr_blocks, cfg, rng, n_threads):
+    # Threads scale with the training size (OpenMP overhead dominates on small samples). The
+    # count depends only on the training window, so it is the same in truncated reruns.
+    n_threads = int(min(n_threads, max(1, (tr.stop - tr.start) // 10000)))
     dtr = xgb.DMatrix(X[tr], label=y[tr], nthread=n_threads)
     dva = xgb.DMatrix(X[va], label=y[va], nthread=n_threads)
     seed = int(rng.integers(0, 2 ** 31 - 1))
@@ -1020,6 +1046,9 @@ def _unit_vol(w, risk_t):
 
 def _meta_weights(R, cfg):
     K = R.shape[1]
+    R = R[np.isfinite(R).all(axis=1)]
+    if len(R) == 0:
+        return np.full(K, 1.0 / K)
     th, _ = nnls(R, np.ones(R.shape[0]))
     th = th / th.sum() if th.sum() > 0 else np.full(K, 1.0 / K)
     a = cfg["meta_shrink"]
@@ -1104,6 +1133,9 @@ def build_portfolios(panel, daily, risk, preds, cfg, diag):
             ret_rows.append((t, s, sret[s][t]))
         if book is None or not np.isfinite(book).all() or np.abs(book).sum() == 0:
             book = _fallback_weights(preds, r, n)
+            v = rk.var(book) * DAYS_PER_MONTH  # same units as the sleeves: unit ex-ante vol
+            if np.isfinite(v) and v > 0:
+                book = book / np.sqrt(v)
         # Volatility timing: forecast from today's book applied to the past year of daily returns
         scale, vs, vf = _vol_scale(book, panel, daily, rk, t, cfg, target_m, lam_v, scales)
         w_final = book * scale
@@ -1179,7 +1211,8 @@ def run_model(chars, features, daily_ret, config=None, diagnostics=False):
     daily = Daily(daily_ret, panel)
     timing.append(("daily", time.time() - t))
     t = time.time()
-    risk = build_risk_model(panel, daily, cfg, diag)
+    with threadpool_limits(limits=1, user_api="blas"):  # many small regressions
+        risk = build_risk_model(panel, daily, cfg, diag)
     timing.append(("risk_model", time.time() - t))
     t = time.time()
     preds = fit_learners(panel, cfg, diag, n_threads)
