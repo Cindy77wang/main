@@ -116,7 +116,7 @@ def _rank_block(block: np.ndarray) -> np.ndarray:
 def _prepare(chars: pd.DataFrame, features: pd.DataFrame) -> dict:
     reserved = {"id", "eom", TARGET, "ctff_test"}
     feats, seen = [], set()
-    for f in features["features"].astype(str).tolist():
+    for f in sorted(features["features"].astype(str).tolist()):  # canonical order (Rule 18)
         if f in seen or f in reserved or f not in chars.columns:
             continue
         seen.add(f)
