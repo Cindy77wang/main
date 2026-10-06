@@ -70,6 +70,7 @@ CONFIG = {
     "risk_theme_months": 60,
     "risk_max_themes": 13,  # the 13 themes of Jensen, Kelly and Pedersen (2023)
     "risk_idio_floor_q": 0.05,
+    "risk_stat_factors": 0,  # statistical factors from residuals (hybrid model); 0 = off
     # Return learners
     "learn_window": 240,
     "learn_min_months": 60,
@@ -602,12 +603,51 @@ def build_risk_model(panel, daily, cfg, diag):
             spec = np.full(len(codes), np.nan)
             spec[good] = num[good] / den[good]
             spec = _impute_spec(spec, E, cfg)
+            if cfg["risk_stat_factors"] > 0 and Rw.shape[0] >= cfg["risk_idio_min_obs"]:
+                E, L, spec = _add_stat_factors(E, L, spec, Rw, valid, w, cfg)
             risk[t] = MonthRisk(E, L, spec, ok)
         if (b + 1) % 12 == 0:
             _log(f"risk model: block {b + 1}/{len(starts)} ({time.time() - t0:.0f}s)")
     diag["themes"] = pd.concat(theme_rows, ignore_index=True)
     _log(f"risk model: {len(starts)} blocks, {n_themes} themes ({time.time() - t0:.0f}s)")
     return risk
+
+
+def _add_stat_factors(E, L, spec, Rw, valid, w, cfg):
+    """Hybrid risk model: statistical factors from the past year of specific returns.
+
+    The characteristic factors miss part of the common variation (heterogeneous market
+    betas, measurement error in the exposures). The leading principal components of the
+    EWMA-weighted, standardized residuals capture it. Only components above the
+    Marchenko-Pastur noise edge are kept, their variance is shrunk by the edge, and the
+    specific variances are reduced by the variance they explain, so total risk is unchanged.
+    """
+    n = len(spec)
+    sd = np.sqrt(spec)
+    Z = np.where(valid, Rw, 0.0) / sd[None, :]
+    wn = w / w.sum()
+    Zw = Z * np.sqrt(wn)[:, None]
+    t_eff = 1.0 / (wn ** 2).sum()
+    try:
+        _, sv, Vt = np.linalg.svd(Zw, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return E, L, spec
+    lam = sv ** 2  # variance of each component in standardized units (unit noise level)
+    edge = (1.0 + np.sqrt(n / t_eff)) ** 2
+    k = int(min(cfg["risk_stat_factors"], np.sum(lam > edge)))
+    if k == 0:
+        return E, L, spec
+    lam_s = lam[:k] - edge  # shrink the spiked eigenvalues by the noise edge
+    V = Vt[:k].T  # n x k loadings on standardized residuals
+    load = V * sd[:, None]  # loadings in return units
+    explained = (load ** 2 * lam_s[None, :]).sum(axis=1)
+    floor = np.quantile(spec, cfg["risk_idio_floor_q"])
+    spec_new = np.maximum(spec - explained, np.maximum(0.25 * spec, floor))
+    K0 = L.shape[1]
+    L_new = np.zeros((K0 + k, K0 + k))
+    L_new[:K0, :K0] = L
+    L_new[K0:, K0:] = np.diag(np.sqrt(lam_s))
+    return np.column_stack([E, load]), L_new, spec_new
 
 
 def _impute_spec(spec, E, cfg):
