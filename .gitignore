@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-ctf/
+
+# CTF data is licensed through WRDS and must never be committed
+data/
+*.parquet
+
+# Run outputs (weights, diagnostics, logs)
+output/
+logs/
