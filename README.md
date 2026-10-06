@@ -60,7 +60,8 @@ together with the table of ideas that were tested and rejected.
 
 ## How to reproduce
 
-1. **Environment** (Python 3.13, the CTF runtime):
+1. **Environment** (Python 3.13, the CTF runtime). Install [uv](https://docs.astral.sh/uv/)
+   first if needed (`curl -LsSf https://astral.sh/uv/install.sh | sh`), then:
    ```bash
    uv venv --python 3.13 .venv && source .venv/bin/activate
    uv pip install -r submission/requirements.txt pyarrow       # the model
@@ -79,7 +80,8 @@ together with the table of ideas that were tested and rejected.
 4. **Run the model** on the real data:
    ```bash
    python tools/run_local.py --data data/raw --out output/prism --threads 32
-   # or on a cluster: sbatch slurm/run_prism.slurm
+   # or on a cluster, from the repository root: sbatch slurm/run_prism.slurm
+   # (follow progress with: tail -f prism_<jobid>.out)
    ```
    Estimated from scaled benchmarks: about 3–4 hours on 32 cores (at most ~8 hours in the
    worst case; longer on a laptop) and a peak of about 30–35 GB of RAM (the 415-factor risk
