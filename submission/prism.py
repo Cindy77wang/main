@@ -140,9 +140,18 @@ def _seed(cfg, *keys):
 # Section 1: data preparation
 # ----------------------------------------------------------------------------------------
 
+def _to_datetime(values):
+    """Parse dates given as date objects, strings, datetime64 or yyyymmdd integers."""
+    s = pd.Series(values).reset_index(drop=True)
+    if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+        num = pd.to_numeric(s, errors="coerce")
+        return pd.to_datetime(num.round().astype("Int64").astype(str), format="%Y%m%d", errors="coerce")
+    return pd.to_datetime(s, errors="coerce")
+
+
 def _month_index(values):
-    """Calendar month index year*12 + month - 1 for dates given as date objects, strings or datetime64."""
-    dt = pd.to_datetime(pd.Series(values).reset_index(drop=True), errors="coerce")
+    """Calendar month index year*12 + month - 1."""
+    dt = _to_datetime(values)
     if dt.isna().any():
         raise ValueError("unparseable dates in input")
     return (dt.dt.year * 12 + dt.dt.month - 1).to_numpy(dtype=np.int64)
@@ -239,17 +248,32 @@ class Panel:
         if not self.features:
             raise ValueError("no usable features")
 
+        if chars.columns.duplicated().any():
+            chars = chars.loc[:, ~chars.columns.duplicated()]
         ids = pd.to_numeric(chars["id"].reset_index(drop=True)).to_numpy().astype(np.int64)
         month = _month_index(chars["eom"])
         y = pd.to_numeric(chars["ret_exc_lead1m"].reset_index(drop=True), errors="coerce")
         y = y.to_numpy(dtype=np.float64, na_value=np.nan)
-        # Canonical order: month, id, then the return (only matters for duplicated rows)
-        order = np.lexsort((np.nan_to_num(y, nan=0.0), ids, month))
-        keep = np.ones(len(order), dtype=bool)
+        # Canonical order: month, then id
+        order = np.lexsort((ids, month))
         dup = (np.diff(month[order]) == 0) & (np.diff(ids[order]) == 0)
-        keep[1:] = ~dup
-        order = order[keep]
-        if (~keep).sum():
+        if dup.any():
+            # Duplicated (id, eom) rows (absent from the CTF data): keep one, chosen by the
+            # content of its characteristics (never by the return), so the choice does not
+            # depend on the input order
+            involved = np.zeros(len(order), dtype=bool)
+            involved[1:] |= dup
+            involved[:-1] |= dup
+            sub = chars.iloc[order[involved]][self.features].apply(pd.to_numeric, errors="coerce")
+            sub = sub.to_numpy(dtype=np.float64, na_value=np.nan)
+            keys = np.zeros((3, len(chars)))
+            keys[0, order[involved]] = np.isnan(sub).sum(axis=1)
+            keys[1, order[involved]] = np.nansum(sub, axis=1)
+            keys[2, order[involved]] = np.nansum(sub * sub, axis=1)
+            order = np.lexsort((keys[2], keys[1], keys[0], ids, month))
+            keep = np.ones(len(order), dtype=bool)
+            keep[1:] = ~((np.diff(month[order]) == 0) & (np.diff(ids[order]) == 0))
+            order = order[keep]
             _log(f"warning: dropped {(~keep).sum()} duplicated (id, eom) rows")
 
         self.src = order  # positions in the original chars
@@ -295,18 +319,25 @@ class Daily:
     def __init__(self, daily_ret, panel):
         t0 = time.time()
         ids = pd.to_numeric(daily_ret["id"].reset_index(drop=True), errors="coerce").to_numpy()
-        days = pd.to_datetime(daily_ret["date"].reset_index(drop=True), errors="coerce")
-        days = days.to_numpy().astype("datetime64[D]").astype(np.int64)
+        days = _to_datetime(daily_ret["date"]).to_numpy().astype("datetime64[D]").astype(np.int64)
         ret = pd.to_numeric(daily_ret["ret_exc"].reset_index(drop=True), errors="coerce")
         ret = ret.to_numpy(dtype=np.float64, na_value=np.nan)
         first_day = int(_month_end_day(panel.months[0])) - 400
         ok = np.isfinite(ids) & np.isfinite(ret) & (days >= first_day)
         ids, days, ret = ids[ok].astype(np.int64), days[ok], ret[ok]
+        # Trading-day calendar from all stocks (not only the panel's), so that removing later
+        # months of chars never changes the day index of earlier dates
+        self.dates = np.unique(days)
         pos = np.searchsorted(panel.uid, ids)
         pos = np.minimum(pos, len(panel.uid) - 1)
         ok = panel.uid[pos] == ids
         pos, days, ret = pos[ok], days[ok], ret[ok]
-        self.dates = np.unique(days)
+        # Duplicated (id, date) rows (absent from the CTF data): keep one, order-independently
+        srt = np.lexsort((ret, days, pos))
+        pos, days, ret = pos[srt], days[srt], ret[srt]
+        first = np.ones(len(pos), dtype=bool)
+        first[1:] = (np.diff(pos) != 0) | (np.diff(days) != 0)
+        pos, days, ret = pos[first], days[first], ret[first]
         di = np.searchsorted(self.dates, days)
         self.R = np.full((len(self.dates), len(panel.uid)), np.nan, dtype=np.float32)
         self.R[di, pos] = ret.astype(np.float32)
@@ -809,6 +840,7 @@ def fit_learners(panel, cfg, diag, n_threads):
         va = slice(panel.rows(va_m[0]).start, panel.rows(va_m[-1]).stop)
         al = slice(tr.start, va.stop)
         pr = slice(panel.rows(pred_m[0]).start, panel.rows(pred_m[-1]).stop)
+        pr_blocks = [panel.rows(m) for m in pred_m]
         va_bounds = [(panel.rows(m).start - va.start, panel.rows(m).stop - va.start) for m in va_m]
         X, y = panel.X, yz
         year = R // 12
@@ -817,13 +849,13 @@ def fit_learners(panel, cfg, diag, n_threads):
             t1 = time.time()
             rng = _seed(cfg, 100 + list(cfg["learners"]).index(name), year)
             if name == "ridge":
-                p = _ridge_fit_predict(X, y, tr, va, al, pr, va_bounds, cfg)
+                p = _ridge_fit_predict(X, y, tr, va, al, pr_blocks, va_bounds, cfg)
             elif name == "xgb":
-                p = _xgb_fit_predict(X, y, tr, va, al, pr, cfg, rng, n_threads)
+                p = _xgb_fit_predict(X, y, tr, va, al, pr_blocks, cfg, rng, n_threads)
             elif name == "mlp":
-                p = _mlp_fit_predict(X, y, tr, va, al, pr, cfg, rng)
+                p = _mlp_fit_predict(X, y, tr, va, al, pr_blocks, cfg, rng)
             elif name == "lstm":
-                p = _lstm_fit_predict(panel, y, tr, va, al, pr, lag_index, cfg, rng)
+                p = _lstm_fit_predict(panel, y, tr, va, al, pr_blocks, lag_index, cfg, rng)
             else:
                 raise ValueError(name)
             preds[name][pr] = p
@@ -845,7 +877,13 @@ def fit_learners(panel, cfg, diag, n_threads):
     return preds
 
 
-def _ridge_fit_predict(X, y, tr, va, al, pr, va_bounds, cfg):
+def _per_month(fn, blocks):
+    """Apply fn to each month's row block and concatenate. Matrix products then have the same
+    shape whether or not later months exist, so results are bit-identical under truncation."""
+    return np.concatenate([np.asarray(fn(b), dtype=np.float64).reshape(-1) for b in blocks])
+
+
+def _ridge_fit_predict(X, y, tr, va, al, pr_blocks, va_bounds, cfg):
     def gram(sl):
         Xs = X[sl].astype(np.float64)
         return Xs.T @ Xs, Xs.T @ y[sl]
@@ -866,10 +904,10 @@ def _ridge_fit_predict(X, y, tr, va, al, pr, va_bounds, cfg):
     G, bvec = G_tr + G_va, b_tr + b_va  # train and validation blocks are adjacent: al = tr + va
     scale = max(np.trace(G) / G.shape[0], 1e-12)
     beta = np.linalg.solve(G + best_z * scale * np.eye(G.shape[0]), bvec)
-    return X[pr].astype(np.float64) @ beta
+    return _per_month(lambda b: X[b].astype(np.float64) @ beta, pr_blocks)
 
 
-def _xgb_fit_predict(X, y, tr, va, al, pr, cfg, rng, n_threads):
+def _xgb_fit_predict(X, y, tr, va, al, pr_blocks, cfg, rng, n_threads):
     dtr = xgb.DMatrix(X[tr], label=y[tr], nthread=n_threads)
     dva = xgb.DMatrix(X[va], label=y[va], nthread=n_threads)
     seed = int(rng.integers(0, 2 ** 31 - 1))
@@ -893,20 +931,20 @@ def _xgb_fit_predict(X, y, tr, va, al, pr, cfg, rng, n_threads):
     params = dict(base, max_depth=int(depth))
     dal = xgb.DMatrix(X[al], label=y[al], nthread=n_threads)
     bst = xgb.train(params, dal, num_boost_round=max(int(n_trees), 10))
-    return bst.predict(xgb.DMatrix(X[pr], nthread=n_threads)).astype(np.float64)
+    return _per_month(lambda b: bst.predict(xgb.DMatrix(X[b], nthread=n_threads)), pr_blocks)
 
 
-def _mlp_fit_predict(X, y, tr, va, al, pr, cfg, rng):
+def _mlp_fit_predict(X, y, tr, va, al, pr_blocks, cfg, rng):
     Xtr, ytr = X[tr], y[tr].astype(np.float32)
     Xva, yva = X[va], y[va].astype(np.float32)
-    out = np.zeros(pr.stop - pr.start)
+    out = 0.0
     for s in range(int(cfg["mlp_seeds"])):
         params = _train_mlp(Xtr, ytr, Xva, yva, cfg, np.random.default_rng(rng.integers(0, 2 ** 63)))
-        out += _mlp_forward(params, X[pr])[-1][:, 0]
+        out = out + _per_month(lambda b: _mlp_forward(params, X[b])[-1][:, 0], pr_blocks)
     return out / cfg["mlp_seeds"]
 
 
-def _lstm_fit_predict(panel, y, tr, va, al, pr, lag_index, cfg, rng):
+def _lstm_fit_predict(panel, y, tr, va, al, pr_blocks, lag_index, cfg, rng):
     L, k = int(cfg["lstm_len"]), int(cfg["lstm_inputs"])
     Xtr = panel.X[tr].astype(np.float64)
     cov = Xtr.T @ Xtr / max(len(Xtr), 1)
@@ -915,11 +953,14 @@ def _lstm_fit_predict(panel, y, tr, va, al, pr, lag_index, cfg, rng):
     V = V * np.where(V[np.abs(V).argmax(axis=0), np.arange(V.shape[1])] >= 0, 1.0, -1.0)[None, :]
     # Scores for all rows that can appear in a sequence (training window and prediction rows)
     first_m = int(panel.month[tr.start]) - L
-    lo = int(panel.starts[np.searchsorted(panel.months, first_m)])
+    last_m = int(panel.month[pr_blocks[-1].start])
+    blocks = [panel.rows(m) for m in panel.months if first_m <= m <= last_m]
     U = np.zeros((len(panel.month), V.shape[1]), dtype=np.float32)
-    U[lo:pr.stop] = (panel.X[lo:pr.stop].astype(np.float64) @ V).astype(np.float32)
+    for b in blocks:  # per month, so shapes do not depend on later data
+        U[b] = (panel.X[b].astype(np.float64) @ V).astype(np.float32)
     sd = U[tr].std(axis=0)
-    U[lo:pr.stop] /= np.where(sd > 1e-12, sd, 1.0)[None, :].astype(np.float32)
+    for b in blocks:
+        U[b] /= np.where(sd > 1e-12, sd, 1.0)[None, :].astype(np.float32)
     tr_rows = np.arange(tr.start, tr.stop)
     n_sub = int(round(cfg["lstm_subsample"] * len(tr_rows)))
     if 0 < n_sub < len(tr_rows):
@@ -927,11 +968,11 @@ def _lstm_fit_predict(panel, y, tr, va, al, pr, lag_index, cfg, rng):
     va_rows = np.arange(va.start, va.stop)
     Utr, ytr = _sequences(panel, tr_rows, U, lag_index, L), y[tr_rows].astype(np.float32)
     Uva, yva = _sequences(panel, va_rows, U, lag_index, L), y[va_rows].astype(np.float32)
-    Upr = _sequences(panel, np.arange(pr.start, pr.stop), U, lag_index, L)
-    out = np.zeros(pr.stop - pr.start)
+    Upr = [_sequences(panel, np.arange(b.start, b.stop), U, lag_index, L) for b in pr_blocks]
+    out = 0.0
     for s in range(int(cfg["lstm_seeds"])):
         net = _train_lstm(Utr, ytr, Uva, yva, cfg, np.random.default_rng(rng.integers(0, 2 ** 63)))
-        out += net.forward(Upr)[0]
+        out = out + np.concatenate([net.forward(u)[0] for u in Upr])
     return out / cfg["lstm_seeds"]
 
 
@@ -1127,7 +1168,8 @@ def run_model(chars, features, daily_ret, config=None, diagnostics=False):
     if config:
         cfg.update(config)
     np.random.seed(int(cfg["seed"]) % (2 ** 32))
-    n_threads = int(cfg["n_threads"]) or int(min(32, os.cpu_count() or 1))
+    cpus = os.process_cpu_count() if hasattr(os, "process_cpu_count") else os.cpu_count()
+    n_threads = int(cfg["n_threads"]) or int(min(32, cpus or 1))
     diag = {}
     timing = []
     t = time.time()
