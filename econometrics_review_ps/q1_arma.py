@@ -44,10 +44,10 @@ from common import (HERE, INK, MUTED, SERIES_COLORS, newey_west, plt, style_axes
 # Configuration
 # ---------------------------------------------------------------------------
 FACTORS = {
-    "short_term_reversal": "Short-term reversal",
-    "momentum": "Momentum",
-    "value": "Value",
-    "low_risk": "Low risk",
+    "ret_1_0": "Short-term reversal",
+    "ret_12_1": "Momentum (12-1)",
+    "be_me": "Value (book-to-market)",
+    "betabab_1260d": "Betting against beta",
 }
 START, END = "1975-01-01", "2025-12-31"
 TRAIN_END = "2015-12-31"
@@ -83,7 +83,7 @@ def load_jkp() -> pd.DataFrame:
             w = d.set_index("date")
         w.index = pd.to_datetime(w.index)
         frames.append(w)
-    df = pd.concat(frames, axis=1)
+    df = pd.concat(frames, axis=1, sort=True)
     df = df.loc[:, ~df.columns.duplicated()].sort_index()
     missing = [f for f in FACTORS if f not in df.columns]
     if missing:
@@ -504,7 +504,8 @@ def main():
             rec = dict(factor=f, model=nm, chosen=nm.startswith(label(*choices[f]) + " "),
                        MSE=mse, RMSE=np.sqrt(mse), MAE=np.mean(np.abs(e)),
                        R2_oos=1 - mse / mse_bench)
-            if nm != "historical mean":
+            # skip tests when the forecast is the training mean itself (white-noise model)
+            if nm != "historical mean" and np.max(np.abs(fc - f_mean)) > 1e-8:
                 rec["DM vs mean"], rec["DM p"] = diebold_mariano(e, y_te - f_mean)
                 rec["CW vs mean"], rec["CW p"] = clark_west(y_te, f_mean, fc)
                 if not nm.startswith("AR(1) MLE"):
@@ -528,7 +529,8 @@ def main():
         ax.set_title(FACTORS[f], loc="left", fontsize=9)
         ax.xaxis.set_major_locator(matplotlib.dates.YearLocator(3))
         ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%Y"))
-        ax.legend(frameon=False, fontsize=7, labelcolor=INK, loc="lower left")
+        ax.legend(frameon=False, fontsize=7, labelcolor=INK,
+                  loc="upper left" if f in ("ret_1_0", "be_me") else "lower left")
         style_axes(ax)
     axes[0].set_ylabel("cum. SSE(mean) − SSE(model)")
     fig.suptitle("Out-of-sample 2016-2025: above zero = model beats the training mean",
