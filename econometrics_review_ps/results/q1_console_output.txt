@@ -1,0 +1,46 @@
+Sample 1975-01 to 2025-12, T = 612
+ from the correlogram
+
+- **Short-term reversal**: AR(1) - PACF cuts off after lag 1 while the ACF decays.
+- **Momentum**: ARMA(0,0) - no significant autocorrelation; returns look like white noise.
+- **Value**: AR(4) - PACF cuts off after lag 4 while the ACF decays.
+- **Low risk**: ARMA(1,1) - no single low-order lag is significant but Ljung-Box(12) rejects.
+
+                                            chosen       MSE      RMSE       MAE    R2_oos  DM vs mean      DM p  CW vs mean      CW p  DM vs AR(1) MLE  DM p (AR1)
+factor | model                                                                                                                                                     
+short_term_reversal | historical mean        False  0.000153  0.012381  0.009086  0.000000         NaN       NaN         NaN       NaN              NaN         NaN
+short_term_reversal | AR(1) regression        True  0.000156  0.012486  0.008984 -0.016984    0.555316  0.578678    0.057472  0.477084        -0.381520    0.702817
+short_term_reversal | AR(1) MLE               True  0.000156  0.012486  0.008985 -0.017079    0.557262  0.577348    0.053482  0.478674              NaN         NaN
+short_term_reversal | ARMA(1,1) regression   False  0.000156  0.012495  0.009035 -0.018556    0.683847  0.494072   -0.112087  0.544623         0.269934    0.787211
+short_term_reversal | ARMA(1,1) MLE          False  0.000158  0.012553  0.009138 -0.027950    1.005229  0.314786   -0.351520  0.637401         1.192359    0.233121
+momentum | historical mean                   False  0.000701  0.026481  0.020599  0.000000         NaN       NaN         NaN       NaN              NaN         NaN
+momentum | AR(1) regression                  False  0.000702  0.026495  0.020621 -0.001042    0.642556  0.520512   -0.559072  0.711944         0.538535    0.590208
+momentum | AR(1) MLE                         False  0.000701  0.026483  0.020601 -0.000162    1.481194  0.138555   -1.477846  0.930275              NaN         NaN
+momentum | ARMA(1,1) regression              False  0.000700  0.026457  0.020585  0.001851   -0.440876  0.659303    0.609959  0.270944        -0.470799    0.637785
+momentum | ARMA(1,1) MLE                     False  0.000706  0.026564  0.020653 -0.006308    0.678779  0.497278   -0.458050  0.676542         0.666862    0.504860
+momentum | ARMA(0,0) regression               True  0.000701  0.026481  0.020599  0.000000   -0.839245  0.401332    0.839245  0.200666        -1.481194    0.138555
+momentum | ARMA(0,0) MLE                      True  0.000701  0.026481  0.020599  0.000000   -0.839245  0.401332    0.839245  0.200666        -1.481194    0.138555
+value | historical mean                      False  0.000998  0.031592  0.023911  0.000000         NaN       NaN         NaN       NaN              NaN         NaN
+value | AR(1) regression                     False  0.000970  0.031144  0.023459  0.028198   -0.999667  0.317472    1.466965  0.071193        -0.505762    0.613023
+value | AR(1) MLE                            False  0.000971  0.031154  0.023489  0.027549   -0.958691  0.337715    1.420715  0.077700              NaN         NaN
+value | ARMA(1,1) regression                 False  0.000975  0.031224  0.023507  0.023186   -0.671116  0.502147    1.362583  0.086507         0.481567    0.630114
+value | ARMA(1,1) MLE                        False  0.000967  0.031100  0.023493  0.030911   -1.031026  0.302529    1.468593  0.070972        -0.874792    0.381687
+value | AR(4) regression                      True  0.000961  0.030994  0.023184  0.037503   -0.779520  0.435673    1.417815  0.078122        -0.354651    0.722851
+value | AR(4) MLE                             True  0.000962  0.031009  0.023184  0.036612   -0.772361  0.439900    1.405718  0.079904        -0.324003    0.745935
+low_risk | historical mean                   False  0.001162  0.034086  0.026387  0.000000         NaN       NaN         NaN       NaN              NaN         NaN
+low_risk | AR(1) regression                  False  0.001153  0.033960  0.026296  0.007366   -0.730956  0.464806    1.014007  0.155290         0.647344    0.517409
+low_risk | AR(1) MLE                         False  0.001153  0.033957  0.026294  0.007523   -0.747208  0.454938    1.029778  0.151557              NaN         NaN
+low_risk | ARMA(1,1) regression               True  0.001155  0.033980  0.026312  0.006160   -0.548104  0.583620    0.872693  0.191415         0.477891    0.632728
+low_risk | ARMA(1,1) MLE                      True  0.001153  0.033957  0.026292  0.007541   -0.752011  0.452044    1.039026  0.149396        -0.038600    0.969209
+                                 chosen  last_return  uncond_mean  forecast  forecast_sd      lo95      hi95
+forecast for 2026-01                                                                                        
+short_term_reversal | AR(1)        True     0.003328     0.000949  0.000679     0.012938 -0.024679  0.026036
+short_term_reversal | ARMA(1,1)   False     0.003328     0.000950  0.000819     0.012937 -0.024538  0.026176
+momentum | ARMA(0,0)               True    -0.014438     0.003161  0.003161     0.032912 -0.061347  0.067669
+momentum | AR(1)                  False    -0.014438     0.003166  0.003451     0.032908 -0.061049  0.067951
+momentum | ARMA(1,1)              False    -0.014438     0.003212  0.003120     0.032864 -0.061293  0.067533
+value | AR(1)                     False     0.017525     0.003612  0.005463     0.033994 -0.061164  0.072091
+value | ARMA(1,1)                 False     0.017525     0.003619  0.006392     0.033974 -0.060198  0.072981
+value | AR(4)                      True     0.017525     0.003616  0.005486     0.033677 -0.060521  0.071494
+low_risk | AR(1)                  False    -0.001057     0.001177  0.001041     0.039019 -0.075436  0.077518
+low_risk | ARMA(1,1)               True    -0.001057     0.001177  0.000920     0.039018 -0.075556  0.077397

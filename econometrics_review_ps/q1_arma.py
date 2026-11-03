@@ -32,6 +32,7 @@ import glob
 import os
 from pathlib import Path
 
+import matplotlib.dates
 import numpy as np
 import pandas as pd
 from scipy import optimize, stats
@@ -43,10 +44,10 @@ from common import (HERE, INK, MUTED, SERIES_COLORS, newey_west, plt, style_axes
 # Configuration
 # ---------------------------------------------------------------------------
 FACTORS = {
-    "ret_1_0": "Short-term reversal",
-    "ret_12_1": "Momentum (12-1)",
-    "be_me": "Value (book-to-market)",
-    "betabab_1260d": "Betting against beta",
+    "short_term_reversal": "Short-term reversal",
+    "momentum": "Momentum",
+    "value": "Value",
+    "low_risk": "Low risk",
 }
 START, END = "1975-01-01", "2025-12-31"
 TRAIN_END = "2015-12-31"
@@ -525,9 +526,11 @@ def main():
             ax.plot(test_dates, cum[(f, nm)], lw=2, color=SERIES_COLORS[k], label=nm.replace(" MLE", ""))
         ax.axhline(0, color=MUTED, lw=0.8)
         ax.set_title(FACTORS[f], loc="left", fontsize=9)
+        ax.xaxis.set_major_locator(matplotlib.dates.YearLocator(3))
+        ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%Y"))
+        ax.legend(frameon=False, fontsize=7, labelcolor=INK, loc="lower left")
         style_axes(ax)
     axes[0].set_ylabel("cum. SSE(mean) − SSE(model)")
-    axes[0].legend(frameon=False, fontsize=8, labelcolor=INK)
     fig.suptitle("Out-of-sample 2016-2025: above zero = model beats the training mean",
                  x=0.01, ha="left", fontsize=10, color=INK)
     fig.tight_layout()

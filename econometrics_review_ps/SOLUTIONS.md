@@ -21,138 +21,191 @@ python q3_gmm.py
 python q1_arma.py
 ```
 
-`q1_arma.py` needs the JKP data in `inputs/jkp/` first (see Question 1).
+`q1_arma.py` reads the JKP file in `inputs/jkp/` and takes about 1.5 minutes.
 
 ---
 
 ## Question 1 — ARMA models for JKP factors
 
-> **Status.** The code is complete and tested, but **the JKP results are not in this file yet.**
-> The network policy of the environment where this was written blocks `jkpfactors.com`, so
-> the data could not be downloaded. To run it, download the USA monthly factor returns from
-> <https://jkpfactors.com/data> (e.g. *all factors, monthly, capped value-weighted*) and save
-> the CSV in `inputs/jkp/`. Then run `python q1_arma.py`. The script reads the long JKP layout
-> (`location, name, freq, weighting, direction, n_stocks, date, ret`) or a wide file. It
-> writes all the tables and figures referenced below.
->
-> The pipeline was checked on simulated ARMA data in the JKP layout (not saved). The
-> correlogram matches statsmodels' Durbin–Levinson PACF. The exact MLE log-likelihoods and
-> parameters match statsmodels' exact state-space ARIMA to about 1e-5. The Kalman-filter
-> likelihood equals the closed-form AR(1) exact likelihood, and the script asserts this on
-> every run. The correlogram rule recovered the simulated orders (AR(1), MA(1), AR(2)).
+**Data.** `inputs/jkp/usa_all_themes_monthly_vw_cap.csv`: JKP USA *theme* portfolios,
+monthly, capped value-weighted. Each theme is the average of the JKP factors in that
+cluster. The sample is 1975-01 to 2025-12 (T = 612); returns are in decimals per month.
+Sample statistics: `results/q1_summary_stats.md`.
 
-### Factor choice (JKP names in brackets)
+### Factor choice
 
-1. **Short-term reversal** (`ret_1_0`). It is built from last month's return, so it is the
-   factor most directly linked to liquidity provision and microstructure. It is a natural
-   place to look for return autocorrelation.
-2. **Momentum** (`ret_12_1`). It has a large premium and rare but violent crashes. "Factor
-   momentum" (Gupta & Kelly 2019; Ehsani & Linnainmaa 2022) is the claim that factor returns
-   themselves are positively autocorrelated, which is exactly what an ARMA model measures.
-3. **Value** (`be_me`). It has a slow-moving valuation spread and a long drawdown from 2017
-   to 2020. If the expected return μ_t is a persistent AR(1) and realized returns are
-   μ_t + noise, returns follow an **ARMA(1,1) with φ close to 1 and θ close to −φ**. That
-   produces small but long-lived autocorrelations, which an AR(1) misses.
-4. **Betting against beta** (`betabab_1260d`). Its premium is tied to funding liquidity and
-   leverage constraints (Frazzini & Pedersen 2014). Funding conditions are persistent, so
-   predictability is plausible.
+| Theme | Mean / month | Std | Ann. Sharpe | Why it is interesting |
+|---|---|---|---|---|
+| **Short-term reversal** | 0.10% | 1.30% | 0.25 | Built from last month's return, so it is a compensation for liquidity provision. Microstructure and liquidity shocks are the most likely source of return autocorrelation. |
+| **Momentum** | 0.32% | 3.29% | 0.33 | A large premium with violent crashes. The "factor momentum" literature (Gupta & Kelly 2019; Ehsani & Linnainmaa 2022) claims factor returns are positively autocorrelated, which is exactly what an ARMA model tests. |
+| **Value** | 0.36% | 3.43% | 0.36 | Driven by a slow-moving valuation spread, with a long 2017–2020 drawdown. If the expected return μₜ is a persistent AR(1) and returns are μₜ + noise, returns are ARMA(1,1) with φ ≈ 1 and θ ≈ −φ. |
+| **Low risk** | 0.12% | 3.91% | 0.10 | Betting against beta and low volatility. The premium is linked to leverage and funding constraints (Frazzini & Pedersen 2014), which are persistent, so predictability is plausible. |
 
-The factor list is the `FACTORS` dictionary at the top of `q1_arma.py` and can be swapped
-for any four JKP factor names.
-
-### ACF / PACF and tests
+### ACF / PACF and tests (`results/figures/q1_acf_pacf.png`, `results/q1_correlograms.md`)
 
 * Sample ACF: $\hat\rho_k=\sum_{t>k}(x_t-\bar x)(x_{t-k}-\bar x)/\sum_t(x_t-\bar x)^2$.
-  The PACF comes from the Durbin–Levinson recursion.
-* Individual tests use $z=\hat\rho_k\sqrt T$ (and the same for the PACF), which is N(0,1)
-  under white noise. Bartlett standard errors are also reported. The joint test is
-  Ljung–Box $Q(m)=T(T+2)\sum_{k\le m}\hat\rho_k^2/(T-k)\sim\chi^2_m$ for m = 1, …, 12.
-* Output: `results/figures/q1_acf_pacf.png` and `results/q1_correlograms.md`.
-* Model expected from the correlogram (one sentence per factor). The script writes these to
-  the end of `results/q1_correlograms.md` using this rule: a PACF that cuts off at lag p
-  while the ACF decays suggests AR(p); an ACF that cuts off at lag q suggests MA(q); joint
-  significance without a clean cut-off suggests ARMA(1,1). To override the rule after
-  looking at the plots, edit `CHOICE`.
+  The PACF comes from the Durbin–Levinson recursion; it matches statsmodels.
+* Individual tests use $z=\hat\rho_k\sqrt T$, N(0,1) under white noise (band ±1.96/√T = ±0.079).
+* The joint test is Ljung–Box $Q(m)=T(T+2)\sum_{k\le m}\hat\rho_k^2/(T-k)\sim\chi^2_m$.
 
-### Estimation
+| lag | STR ACF | STR PACF | Mom ACF | Mom PACF | Value ACF | Value PACF | Low-risk ACF | Low-risk PACF |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **−0.114** | **−0.114** | −0.016 | −0.016 | **0.132** | **0.132** | 0.061 | 0.061 |
+| 2 | 0.020 | 0.007 | −0.066 | −0.066 | 0.058 | 0.042 | −0.004 | −0.008 |
+| 3 | −0.015 | −0.012 | 0.025 | 0.023 | −0.039 | −0.053 | −0.045 | −0.045 |
+| 4 | 0.022 | 0.019 | −0.048 | −0.052 | **0.105** | **0.117** | 0.036 | 0.042 |
+| 5 | −0.004 | 0.001 | −0.010 | −0.008 | −0.058 | **−0.085** | −0.039 | −0.044 |
+| 6 | 0.026 | 0.025 | 0.044 | 0.036 | **0.113** | **0.124** | 0.075 | **0.079** |
+| 10 | 0.006 | 0.013 | 0.005 | 0.010 | 0.056 | 0.038 | **0.084** | **0.085** |
+| 11 | **0.119** | **0.121** | −0.066 | −0.067 | **0.080** | 0.075 | 0.074 | 0.065 |
+| 12 | **−0.124** | **−0.099** | **0.109** | **0.105** | **−0.110** | **−0.148** | **−0.098** | **−0.111** |
+| Ljung–Box Q(12), p | 28.8, 0.004 | | 19.0, 0.088 | | 47.9, <0.001 | | 25.6, 0.012 | |
 
-**(a) Regression.** AR(p): OLS of $x_t$ on $(1,x_{t-1},\dots,x_{t-p})$. Models with an MA
-part use Hannan–Rissanen:
+Bold = significant at 5%. Lags 7–9 are omitted here and are in the full tables.
 
-1. Fit a long AR(m) by OLS, with $m=\max(12,\lceil(\ln T)^2\rceil)$, to get residuals
-   $\hat\varepsilon_t$.
-2. Regress $x_t$ on $(1,x_{t-1..t-p},\hat\varepsilon_{t-1..t-q})$.
+Every theme shows a lag-12 spike, i.e. annual seasonality in factor returns (Heston &
+Sadka 2008; Keloharju, Linnainmaa & Nyberg 2016). A low-order ARMA cannot capture it.
+The lag choice below therefore uses lags 1–4, applying the rule in `choose_order`.
 
-$\mu=c/(1-\sum\phi_i)$.
+**Expected model, one sentence per factor:**
+
+* **Short-term reversal → AR(1).** The PACF has a single significant spike at lag 1 (−0.11)
+  and nothing at lags 2–10, while the ACF is also only lag 1. This is the signature of an
+  AR(1) with negative φ (consistent with reversal).
+* **Momentum → ARMA(0,0), white noise.** No ACF or PACF lag from 1 to 11 is significant and
+  Ljung–Box(12) does not reject at 5% (p = 0.09). So, perhaps surprisingly given "factor
+  momentum", the momentum theme's own past returns should not predict it.
+* **Value → AR(4).** The PACF is significant at lags 1 and 4 (and 6), and the ACF does not
+  cut off cleanly. That points to an autoregression of order 4.
+* **Low risk → ARMA(1,1).** No single low-order lag is significant but Ljung–Box(12)
+  rejects (p = 0.012). The dependence is weak and spread out, which a parsimonious ARMA(1,1)
+  can approximate (the "persistent expected return + noise" representation).
+
+### Estimation (`results/q1_estimates.md`)
+
+**(a) Regression.**
+
+* AR(p): OLS of $x_t$ on $(1,x_{t-1..t-p})$.
+* ARMA(p,q): Hannan–Rissanen. First fit a long AR(m) by OLS, with
+  $m=\max(12,\lceil(\ln T)^2\rceil)=41$, to get residuals $\hat\varepsilon_t$; then regress
+  $x_t$ on $(1,x_{t-1..t-p},\hat\varepsilon_{t-1..t-q})$.
+* $\mu=c/(1-\sum\phi_i)$.
 
 **(b) Exact Gaussian MLE.** For
 $x_t-\mu=\sum_{i=1}^p\phi_i(x_{t-i}-\mu)+\varepsilon_t+\sum_{j=1}^q\theta_j\varepsilon_{t-j}$
-with $\varepsilon_t\sim N(0,\sigma^2)$, the vector $x=(x_1,\dots,x_T)'$ is
+with $\varepsilon_t\sim N(0,\sigma^2)$, the vector $x$ is
 $N(\mu\iota,\sigma^2\Omega(\phi,\theta))$, so the exact log-likelihood is
 
 $$\ell(\mu,\phi,\theta,\sigma^2)=-\tfrac T2\ln(2\pi\sigma^2)-\tfrac12\ln|\Omega|-\tfrac1{2\sigma^2}(x-\mu\iota)'\Omega^{-1}(x-\mu\iota).$$
 
-It is evaluated without inverting Ω through the prediction-error decomposition
-$\ell=-\tfrac12\sum_t[\ln 2\pi+\ln(\sigma^2F_t)+v_t^2/(\sigma^2F_t)]$. Here the innovations
+It is evaluated through the prediction-error decomposition
+$\ell=-\tfrac12\sum_t[\ln 2\pi+\ln(\sigma^2F_t)+v_t^2/(\sigma^2F_t)]$. The innovations
 $v_t=x_t-E[x_t|x_{1:t-1}]$ and their variances $F_t$ come from the Kalman filter on Harvey's
-state-space form. The filter starts from the stationary state covariance
-$P_0=TP_0T'+RR'$, which is what makes the likelihood exact rather than conditional. Details:
+state-space form, started from the stationary covariance $P_0=TP_0T'+RR'$. That
+initialization is what makes the likelihood exact rather than conditional. Details:
 
 * σ² is concentrated out.
-* Stationarity and invertibility are imposed by mapping unconstrained parameters to partial
-  autocorrelations, tanh(u) ∈ (−1, 1), and then to AR/MA coefficients.
-* Standard errors come from the inverse numerical Hessian of the exact log-likelihood in
-  natural parameters.
+* Stationarity and invertibility are imposed through the partial-autocorrelation (tanh)
+  transform.
+* Standard errors come from the inverse numerical Hessian.
 * For AR(1) the closed form
   $\ell=-\tfrac12\ln\frac{2\pi\sigma^2}{1-\phi^2}-\frac{(1-\phi^2)(x_1-\mu)^2}{2\sigma^2}-\frac{T-1}{2}\ln 2\pi\sigma^2-\sum_{t\ge2}\frac{(x_t-\mu-\phi(x_{t-1}-\mu))^2}{2\sigma^2}$
-  is used as a check.
+  is checked against the filter on every run.
 
-Output: `results/q1_estimates.md` (estimates, standard errors, log L and BIC for AR(1),
-ARMA(1,1) and the chosen model, by both methods).
+| Factor | Model | Regression | MLE (se) | log L | BIC |
+|---|---|---|---|---|---|
+| STR | AR(1) | φ = −0.114 (0.040) | φ = −0.114 (0.040) | 1792.34 | **−3565.4** |
+| STR | ARMA(1,1) | φ = −0.329, θ = 0.232 | φ = −0.197 (0.41), θ = 0.085 (0.42) | 1792.36 | −3559.1 |
+| Momentum | ARMA(0,0) | μ = 0.32% | μ = 0.32% (0.13%) | 1220.92 | **−2429.0** |
+| Momentum | AR(1) | φ = −0.016 (0.040) | φ = −0.016 (0.041) | 1221.00 | −2422.8 |
+| Momentum | ARMA(1,1) | φ = 0.067, θ = −0.100 | φ = 0.782 (0.28), θ = −0.816 (0.26) | 1221.82 | −2418.0 |
+| Value | AR(1) | φ = 0.132 (0.040) | φ = 0.133 (0.040) | 1201.13 | **−2383.0** |
+| Value | ARMA(1,1) | φ = 0.003, θ = 0.151 | φ = 0.353 (0.28), θ = −0.224 (0.30) | 1201.48 | −2377.3 |
+| Value | AR(4) | φ = (0.141, 0.041, −0.068, 0.118) | φ = (0.136, 0.043, −0.070, 0.119), se ≈ 0.04 | **1206.82** | −2375.1 |
+| Low risk | AR(1) | φ = 0.061 (0.040) | φ = 0.061 (0.040) | 1116.76 | **−2214.3** |
+| Low risk | ARMA(1,1) | φ = 0.004, θ = 0.060 | φ = 0.013 (0.40), θ = 0.048 (0.40) | 1116.76 | −2207.9 |
 
-### Out-of-sample, 2016–2025
+**Regression vs. MLE.**
 
-All models are re-estimated on 1975–2015. Parameters are then held fixed and one-step-ahead
-forecasts are made for every month from 2016 to 2025:
+* For pure AR models the two methods agree to the third decimal. Conditional least squares
+  and exact MLE differ only through the first p observations.
+* For ARMA(1,1) they differ a lot (momentum: HR gives φ = 0.07, θ = −0.10; MLE gives
+  φ = 0.78, θ = −0.82). This is the classic near-cancellation of AR and MA roots.
+  When φ ≈ −θ, the ARMA(1,1) is close to white noise and the likelihood is flat along the
+  ridge φ = −θ, so the parameters are weakly identified. The huge MLE standard errors
+  (≈ 0.3–0.4) show this, and the log-likelihood gain over the simpler model is below 1
+  point in every case.
+* The ARMA(1,1) MLE values for momentum and value (φ ≈ 0.35–0.8, θ ≈ −φ) are what the
+  "small persistent expected-return component" story predicts. The data cannot distinguish
+  them from white noise.
 
-* Kalman filter for the MLE fits.
-* The ARMA recursion for the regression fits.
+### Out-of-sample, 2016–2025 (`results/q1_oos.md`, `results/figures/q1_oos_cumulative.png`)
 
-The benchmark is the training-sample mean. The script reports MSE, RMSE, MAE and
-$R^2_{OOS}=1-\text{MSE}_{model}/\text{MSE}_{mean}$, plus three tests:
+Every model is re-estimated on 1975–2015. Parameters are held fixed, and one-step-ahead
+forecasts are made for 2016-01 to 2025-12 (120 months):
 
-* Diebold–Mariano (HAC) against the mean;
-* Clark–West against the mean, since the mean model is nested;
-* Diebold–Mariano against the AR(1).
+* Kalman filter for the MLE fits;
+* the ARMA recursion for the regression fits.
 
-Output: `results/q1_oos.md` (column `chosen` flags the correlogram-based model) and
-`results/figures/q1_oos_cumulative.png` (cumulative SSE gain over the mean).
+The benchmark is the 1975–2015 mean. $R^2_{OOS}=1-\text{MSE}_{model}/\text{MSE}_{mean}$.
+The tests are Diebold–Mariano (DM, HAC) and Clark–West (CW, for nested models, one-sided).
 
-Whether the ACF/PACF-selected model wins out of sample depends on the downloaded data. Read
-it off `q1_oos.md`. Typical outcome for monthly factor returns: autocorrelations are small,
-so R²_OOS is within ±2%. Extra lags tend to over-fit, and the parsimonious AR(1) or the mean
-is hard to beat. In-sample significance of a lag, such as one Ljung–Box rejection, is
-therefore weak evidence of out-of-sample forecastability.
+| Factor | Model | R²_OOS (regression) | R²_OOS (MLE) | CW p (MLE) |
+|---|---|---|---|---|
+| STR | **AR(1)** (chosen) | −1.70% | −1.71% | 0.48 |
+| STR | ARMA(1,1) | −1.86% | −2.80% | 0.64 |
+| Momentum | **ARMA(0,0)** (chosen) | 0 | 0 | — |
+| Momentum | AR(1) | −0.10% | −0.02% | 0.93 |
+| Momentum | ARMA(1,1) | +0.19% | −0.63% | 0.68 |
+| Value | AR(1) | +2.82% | +2.75% | 0.078 |
+| Value | ARMA(1,1) | +2.32% | +3.09% | 0.071 |
+| Value | **AR(4)** (chosen) | **+3.75%** | **+3.66%** | 0.080 |
+| Low risk | AR(1) | +0.74% | +0.75% | 0.15 |
+| Low risk | **ARMA(1,1)** (chosen) | +0.62% | **+0.75%** | 0.15 |
 
-### Next month's expected return
+No DM test against the mean or against the AR(1) is significant at 5% (all p > 0.13).
 
-`results/q1_next_month.md` reports, for every model and factor:
+**Does the ACF/PACF choice win out of sample?** Mostly yes, but the margins are tiny and
+not statistically significant.
 
-* the unconditional mean μ;
-* the last observed return;
-* the forecast $E[x_{T+1}|x_{1:T}]$ with a 95% predictive interval
-  ($\pm1.96\sqrt{\sigma^2F_{T+1}}$).
+* **Value:** the chosen AR(4) is the best model, with R²_OOS ≈ 3.7%. That is economically
+  large for monthly returns, and Clark–West is marginally significant (p ≈ 0.08). Most of
+  the gain comes from 2020–2022, the value crash and rebound, when its persistence paid off.
+* **Low risk:** the chosen ARMA(1,1) MLE is best, but only by 0.002 pp over the AR(1).
+* **Momentum:** the chosen white-noise model is effectively tied for best. Only the HR
+  ARMA(1,1) beats it, by 0.19%, and the MLE version of the same model loses.
+* **Short-term reversal: the choice fails.** The in-sample lag-1 coefficient
+  (φ = −0.11, t = −2.8) does not survive. AR(1) loses 1.7% to the historical mean. Reversal
+  profits have shrunk in the recent, more liquid, high-frequency-trading era, and its
+  in-sample predictability does not carry over.
 
-**Paragraph template** (fill in the numbers from that file for the factor you prefer). For
-an AR(1), $E_T[x_{T+1}]=\mu+\phi(x_T-\mu)$. Next month's expected return is the long-run mean
-μ plus a fraction φ of this month's deviation from it. With φ around 0.1, a 5% return this
-month raises next month's expectation by only about 0.5 percentage points. The predictive
-standard deviation is roughly σ, so the 95% interval is many times wider than the forecast
-revision. The forecast is statistically meaningful but economically modest: it tilts
-exposure at the margin rather than timing the factor. For an ARMA(1,1),
-$E_T[x_{T+1}]=\mu+\phi(x_T-\mu)+\theta\hat\varepsilon_T$. With φ ≈ 1 and θ ≈ −φ this is a
-slowly updated weighted average of past returns, i.e. a filtered estimate of the persistent
-expected return μ_T.
+The general lesson: monthly factor-return autocorrelations of 0.1 are statistically
+detectable in 50 years of data, but they buy at most a few percent of R² and are fragile
+out of sample. Parsimony (the mean or an AR(1)) is hard to beat.
+
+### Next month's expected return — Value, AR(4) (`results/q1_next_month.md`)
+
+The preferred model for value is the AR(4): it was chosen from the correlogram, it was the
+best out of sample, and it has the highest likelihood. Estimated on 1975–2025 by exact MLE,
+it implies
+
+$$E_T[x_{T+1}]=\mu+\sum_{i=1}^4\phi_i(x_{T+1-i}-\mu)=0.36\%+0.136(1.39)+0.043(4.52)-0.070(-4.35)+0.119(-4.22)=0.55\%,$$
+
+where the deviations from the mean (in %) are the value returns of Dec, Nov, Oct and Sep 2025.
+
+So the model expects value to earn **about 0.55% in January 2026**, roughly 0.19 pp above
+its long-run mean of 0.36% per month. The deviation is not driven only by last month. The
+strong November (+4.9%) and December (+1.8%) returns, plus the positive lag-3 effect of a
+weak October, push the forecast up. The weak September works through the lag-4
+coefficient (0.12) and partly offsets this.
+
+The revision is small relative to the risk. The one-step predictive standard deviation is
+3.4%, so the 95% interval is about [−6.1%, +7.1%], and the predictable component explains
+only a few percent of the variance (consistent with R²_OOS ≈ 3.7%). The long-run mean is
+itself uncertain: its standard error is 0.18%, and value averaged only 0.17% per month over
+2016–2025. In practice the AR(4) supports a modest tilt toward value next month, not a
+confident bet. The AR(1) and ARMA(1,1) give 0.55% and 0.64%, so the conclusion does not
+depend on the exact specification.
 
 ---
 
