@@ -19,7 +19,8 @@ Disagreement-adaptive weighting
   Each month, stocks are split into terciles of disagreement |z_tree - z_ridge|. Each
   January, within each tercile, realised returns are regressed on the two forecasts using
   the past ten years of matured out-of-sample forecasts; the weights are shrunk half-way
-  towards the pooled weights and floored at zero. The forecast for a stock is
+  towards the equal-weight (50/50) combination, scaled by its own least-squares fit, and
+  floored at zero. The forecast for a stock is
   b_tree(g) * z_tree + b_ridge(g) * z_ridge for its tercile g, so the data decide whether
   the trees, the ridge or neither deserve trust where the models disagree, and stocks on
   which neither model has been reliable get small forecasts.
@@ -34,8 +35,8 @@ Allocation and trading
   Twelve candidate portfolios (the disagreement-adaptive forecast, a 50/50 blend and the
   trees alone, each under four risk ridges) are weighted by exp(eta * trailing Sharpe
   ratio). Holdings move a fraction tau of the way towards this target each month;
-  (eta, tau) is chosen each January by trailing Sharpe ratio net of an assumed cost of
-  10 bp per dollar traded.
+  (eta, tau) is chosen each January by trailing gross Sharpe ratio, the quantity the CTF
+  scores (it ignores trading costs).
 
 Timing and validation
   A month's returns are used only after all of them are realised (eom_ret, never before
@@ -61,6 +62,17 @@ CTF Admin Modifications (2026-10-08):
    every training row, which happens in the early training windows of the
    full dataset. Versions 1.6 to 1.8 handle that case. The version the
    authors used is not known.
+
+Sharpe-ratio changes (2026-11-04):
+--------------------------------------
+3. The disagreement-group weights are shrunk towards the 50/50 blend (scaled by its
+   least-squares fit) instead of towards the pooled least-squares weights.
+   Reason: estimated combination weights tend to lose to equal weights out of sample
+   (the forecast-combination puzzle); the 'learned' forecast was the weakest candidate.
+4. COST = 0: (eta, tau) is chosen by trailing gross Sharpe ratio.
+   Reason: the CTF scores gross returns, so a cost penalty only slowed trading.
+   Both changes were tested on two simulated CTF-format markets (tools/make_synthetic_data.py,
+   seeds 7 and 11) and raised the Sharpe ratio before and after 1990 in both.
 
 """
 
@@ -607,10 +619,10 @@ OMEGA_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)      # weight on the factor covariance 
 STACK_GROUPS = 3                              # disagreement terciles
 STACK_WINDOW = 120                            # months of matured out-of-sample forecasts
 STACK_MIN = 36                                # before this, the learned forecast is the 50/50 blend
-STACK_SHRINK = 1.0                            # group weights shrunk half-way to the pooled weights
+STACK_SHRINK = 1.0                            # group weights shrunk half-way to the scaled 50/50 blend
 ETA_GRID = (1.0, 3.0, 10.0)                   # softmax temperature on trailing Sharpe ratios
 TAU_GRID = (1.0, 0.5, 0.25)                   # trading speed towards the target portfolio
-COST = 0.001                                  # assumed trading cost: 10 bp per dollar traded
+COST = 0.0                                    # the CTF scores gross returns; no cost penalty
 DEFAULT_PATH = (1, 1)                         # eta = 3, tau = 0.5 until history exists
 
 
@@ -624,13 +636,14 @@ def _dis_groups(zg: np.ndarray, zr: np.ndarray) -> np.ndarray:
 def _stack_fit(zg: np.ndarray, zr: np.ndarray, y: np.ndarray, g: np.ndarray) -> np.ndarray:
     """Weights on (z_tree, z_ridge) by disagreement group, learned from realised outcomes.
 
-    Each group's least-squares weights are shrunk towards the pooled weights (STACK_SHRINK)
+    Each group's least-squares weights are shrunk (STACK_SHRINK) towards the equal-weight
+    blend, scaled by its least-squares fit (equal weights are hard to beat out of sample),
     and floored at zero, so a group in which neither model has predicted returns gets a
     small forecast: 'both unreliable'.
     """
     X = np.column_stack([zg, zr])
-    n = len(y)
-    pooled = np.linalg.solve(X.T @ X + 1e-8 * n * np.eye(2), X.T @ y)
+    b = 0.5 * (zg + zr)
+    pooled = np.full(2, 0.5 * max(float(b @ y) / max(float(b @ b), 1e-12), 0.0))
     B = np.tile(pooled, (STACK_GROUPS, 1))
     for k in range(STACK_GROUPS):
         s = g == k
