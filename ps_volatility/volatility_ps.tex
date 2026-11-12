@@ -33,9 +33,9 @@
 \maketitle
 \vspace{-1.5em}
 
-I use daily CRSP data from WRDS for 2 January 1990 to 31 December 2020, which gives 7,812
+We use daily CRSP data from WRDS for 2 January 1990 to 31 December 2020, which gives 7,812
 trading days. The market series is the CRSP value-weighted return (\texttt{vwretd}) and MSFT
-is its CRSP holding-period return, both in percent per day. I code every likelihood by hand
+is its CRSP holding-period return, both in percent per day. We code every likelihood by hand
 and maximize it numerically. Standard errors are the Bollerslev--Wooldridge robust sandwich,
 and the point estimates agree with the \texttt{arch} Python package to three decimals. The
 code is in \texttt{volatility\_ps.py}.
@@ -57,7 +57,7 @@ MSFT   & 0.102 & 2.02 & 32.1\% & 0.23 & 6.5 & $-15.6$ & 19.6 \\
 
 \subsection{(a) Autocorrelations of returns and squared returns}
 
-Before looking at the data I expected the market to show the stronger volatility clustering.
+Before looking at the data we expected the market to show the stronger volatility clustering.
 Write MSFT's return as $r_{i,t}=\beta r_{m,t}+e_{i,t}$. The part of volatility that persists
 for weeks or months comes from economy-wide conditions such as recessions, financial stress
 and uncertainty about policy, and the index is exposed to all of it. MSFT carries the same
@@ -66,7 +66,7 @@ sample, an antitrust case. That kind of news tends to arrive as a single large m
 not followed by more large moves. Each such day adds a big value of $r_{i,t}^2$ that has no
 counterpart in the days around it, so it raises the variance of squared returns without
 raising their autocovariance, and the measured autocorrelation falls. Diversification strips
-this component out of the index. For returns themselves I expected autocorrelations close to
+this component out of the index. For returns themselves we expected autocorrelations close to
 zero in both series, since predictable daily returns in liquid stocks would be traded away.
 
 \begin{figure}[!htb]
@@ -285,7 +285,7 @@ have to be run together: $\sigma_t^2$ is built from $\varepsilon_{t-1}$, and $\v
 is then built from $\sigma_t^2$. For the same reason the information matrix is no longer
 block-diagonal between mean and variance parameters. A misspecified variance equation now
 biases the estimate of $\lambda$, and the two blocks cannot be estimated in separate steps.
-With $g=\sigma^2$ I estimate $\hat\lambda=0.041$ (0.013) for the market and 0.012 (0.009) for
+With $g=\sigma^2$ we estimate $\hat\lambda=0.041$ (0.013) for the market and 0.012 (0.009) for
 MSFT, a positive risk--return trade-off for the market and none for the single stock, which
 fits the idea that only systematic risk is priced.
 
