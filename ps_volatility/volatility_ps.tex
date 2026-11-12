@@ -1,0 +1,351 @@
+% Problem Set 2: Volatility. Compile with: pdflatex volatility_ps.tex (run twice).
+% Figures are produced by volatility_ps.py; all numbers are in results.json.
+\documentclass[11pt]{article}
+\usepackage[letterpaper,margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{yalered}{RGB}{139,0,0}
+\titleformat{\section}{\large\bfseries\color{yalered}}{}{0pt}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{yalered}}{}{0pt}{}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\floatpagefraction}{0.8}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\1}{\mathbf{1}}
+
+\title{\color{yalered}\textbf{Problem Set 2: Volatility}}
+\author{MGT 927}  % add your name here
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+\textbf{Data and methods.} CRSP daily data from WRDS, 2 Jan 1990 -- 31 Dec 2020
+(7,812 trading days). The market is the CRSP value-weighted return (\texttt{vwretd});
+MSFT is its CRSP return. Returns are in percent per day. All likelihoods are coded by hand
+and maximized numerically. Standard errors are robust (Bollerslev--Wooldridge sandwich),
+and point estimates match the \texttt{arch} Python package to three decimals. Code:
+\texttt{volatility\_ps.py}.
+
+\begin{center}
+\small
+\begin{tabular}{lrrrrrrr}
+\toprule
+ & Mean & S.d. & Ann.\ vol & Skew & Excess kurt. & Min & Max \\
+\midrule
+Market & 0.044 & 1.13 & 17.9\% & $-0.32$ & 11.0 & $-11.8$ & 11.5 \\
+MSFT   & 0.102 & 2.02 & 32.1\% & 0.23 & 6.5 & $-15.6$ & 19.6 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%=====================================================================
+\section{Question 1}
+
+\subsection{(a) Autocorrelations of returns and squared returns}
+
+\textbf{Prior.} The market should show stronger volatility clustering. Persistent volatility
+is economy-wide (recessions, crises, policy uncertainty), and the index carries all of it.
+MSFT adds firm-specific news (earnings, antitrust rulings) that arrives as one-day jumps that
+do not persist. Those jumps add non-persistent noise to $r_t^2$ and lower its autocorrelation.
+Returns themselves should be nearly unpredictable for both series.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[width=\textwidth]{figures/acf.png}
+\caption{Autocorrelations at lags 1--20. Grey band: i.i.d.\ 95\% band $\pm1.96/\sqrt{T}$.
+Dashed: heteroskedasticity-robust 95\% band.}
+\end{figure}
+
+\textbf{Assessment: the prior is correct.} Squared (demeaned) returns are autocorrelated at
+all 20 lags for both series (Ljung--Box $Q(20)$ of 11,056 for the market and 1,853 for MSFT).
+The market's autocorrelations are higher, averaging 0.256 against 0.103 over lags 1--20. They
+also decay more slowly: at lag 20 the market keeps 57\% of its lag-1 value (0.176 vs 0.311),
+while MSFT keeps 26\% (0.048 vs 0.182). Absolute returns, which are less sensitive to outliers,
+give the same ranking. The jump mechanism is visible in the data: MSFT's largest moves
+($+19.6\%$ on 19 Oct 2000, $-14.5\%$ on 3 Apr 2000, $-15.6\%$ on 24 Apr 2000) coincided with
+market moves of less than 4\%. Return autocorrelations are all below 0.06 in absolute value.
+Against the heteroskedasticity-robust band, only 4 of 20 market lags and 1 of 20 MSFT lags are
+significant.
+
+\subsection{(b) Gaussian GARCH(1,1) by maximum likelihood}
+
+\textbf{Model.}
+\[
+r_t = \mu + \varepsilon_t,\qquad \varepsilon_t=\sigma_t z_t,\quad z_t \overset{iid}{\sim} N(0,1),\qquad
+\sigma_t^2 = \omega + \alpha\,\varepsilon_{t-1}^2 + \beta\,\sigma_{t-1}^2,
+\]
+with $\omega>0$, $\alpha,\beta\ge0$ and $\alpha+\beta<1$.
+
+\textbf{Log likelihood.} Since $r_t\mid\mathcal F_{t-1}\sim N(\mu,\sigma_t^2)$, with
+$\theta=(\mu,\omega,\alpha,\beta)$,
+\[
+\mathcal L(\theta) = -\frac12\sum_{t=1}^{T}\left[\log(2\pi)+\log\sigma_t^2(\theta)+\frac{(r_t-\mu)^2}{\sigma_t^2(\theta)}\right],
+\qquad \hat\theta=\arg\max_\theta \mathcal L(\theta),
+\]
+where $\sigma_t^2(\theta)$ follows the recursion from $\sigma_1^2 = T^{-1}\sum_t(r_t-\mu)^2$.
+
+\begin{table}[!htb]
+\centering
+\small
+\begin{tabular}{lrrrrrrrr}
+\toprule
+ & $\mu$ & $\omega$ & $\alpha$ & $\beta$ & $\alpha+\beta$ & Half-life & Long-run vol & $\log L$ \\
+\midrule
+Market & 0.071 & 0.0175 & 0.112 & 0.873 & 0.985 & 47 & 17.4\% & $-10{,}110.2$ \\
+       & (0.009) & (0.0035) & (0.012) & (0.012) & (0.005) & & & \\
+MSFT   & 0.116 & 0.066 & 0.079 & 0.906 & 0.985 & 47 & 33.9\% & $-15{,}649.6$ \\
+       & (0.018) & (0.036) & (0.025) & (0.030) & (0.009) & & & \\
+\bottomrule
+\end{tabular}
+\caption{GARCH(1,1) estimates; robust s.e.\ in parentheses. The s.e.\ of $\alpha+\beta$ uses
+the delta method with the full covariance matrix. Half-life (days) = $\log0.5/\log(\alpha+\beta)$
+for deviations of the variance from its long-run level. Long-run vol
+= $\sqrt{252\,\omega/(1-\alpha-\beta)}$.}
+\end{table}
+
+Both series have small $\alpha$, large $\beta$ and $\alpha+\beta=0.985$, so a deviation of the
+variance from its long-run level halves in about 47 trading days. Because $\hat\alpha$ and
+$\hat\beta$ are strongly negatively correlated ($-0.93$ market, $-0.97$ MSFT), the s.e.\ of
+the sum must include their covariance: it is 0.0046 for the market and 0.0086 for MSFT. A
+one-sided test of $\alpha+\beta=1$ rejects for the market ($t=3.2$) but only marginally for
+MSFT ($t=1.7$, $p\approx0.045$). The market reacts more to news ($\alpha=0.112$ vs 0.079),
+which matches its stronger squared-return autocorrelation. The implied long-run volatilities
+(17.4\%, 33.9\%) match the sample values (17.9\%, 32.1\%). The model removes the clustering:
+$Q(20)$ of the squared standardized residuals is 25.2 ($p=0.19$) for the market and 11.6
+($p=0.93$) for MSFT. It does not remove the fat tails (residual kurtosis 4.9 and 8.8), so the
+Gaussian likelihood is a quasi-likelihood. The estimates remain consistent, but robust
+standard errors are required; for MSFT they are 2--3 times the classical ones.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[width=\textwidth]{figures/garch_vol.png}
+\caption{GARCH(1,1) conditional volatility, annualized.}
+\end{figure}
+
+\subsection{(c) Is MSFT's volatility just the market moving?}
+
+\textbf{No.} In the market model $r_{MSFT,t}=a+b\,r_{m,t}+u_t$, $\hat b=1.15$ (White s.e.\
+0.021) and $R^2=0.41$. The market explains 41\% of MSFT's daily variance; firm-specific news
+explains 59\%.
+
+The firm-specific part also has its own dynamics. GARCH(1,1) on $u_t$ gives $\alpha=0.024$
+(0.006) and $\beta=0.971$ (0.007), with persistence 0.995 (0.002), and $Q(20)$ of $u_t^2$ is
+704. Firm-specific volatility therefore clusters on its own and is at least as persistent as
+market volatility.
+
+Combining the two GARCH fits gives an \emph{approximate} market-related variance share
+\[
+s_t=\frac{b^2\hat\sigma^2_{m,t}}{b^2\hat\sigma^2_{m,t}+\hat\sigma^2_{u,t}} .
+\]
+It is approximate because
+it assumes a constant beta and a market return that is conditionally uncorrelated with $u_t$;
+OLS imposes only unconditional orthogonality, and yearly betas range from 0.73 to 2.30. The
+implied total variance averages 1.05 times MSFT's own GARCH variance (10th--90th percentile
+0.72--1.43). The share averages 0.36 and exceeds one half on only 20\% of days.
+
+\begin{table}[!htb]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Period & Approx.\ market share & Market-related vol & Firm-specific vol \\
+\midrule
+Full sample 1990--2020 & 0.36 & 17.8\% & 23.5\% \\
+Dot-com and antitrust 2000--02 & 0.36 & 25.3\% & 33.8\% \\
+Financial crisis Sep 2008--Jun 2009 & 0.64 & 49.4\% & 33.7\% \\
+COVID crash Mar--Apr 2020 & 0.87 & 71.3\% & 24.2\% \\
+Calm year 2017 & 0.32 & 10.0\% & 14.7\% \\
+\bottomrule
+\end{tabular}
+\caption{Average approximate market-related share of MSFT's conditional variance, and the
+average annualized volatility of each part.}
+\end{table}
+
+The claim holds only in market-wide crises (shares of 0.64 in 2008--09 and 0.87 in
+March--April 2020), when market volatility spikes and firm-specific volatility does not. It
+fails in calm periods (0.32 in 2017) and in MSFT-specific episodes such as 2000--02, when
+firm-specific volatility reached 33.8\%. The yearly $R^2$ has risen to 0.64--0.75 in 2018--20
+as Microsoft became a large index weight. Over 1990--2020 as a whole, however, most of MSFT's
+variance is firm-specific.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[width=\textwidth]{figures/msft_decomp.png}
+\caption{Top: market-related ($b\,\sigma_{m,t}$) and firm-specific ($\sigma_{u,t}$)
+volatility of MSFT. Bottom: approximate market-related share of MSFT's variance (dashed: mean)
+and yearly market-model $R^2$.}
+\end{figure}
+
+\subsection{(d) Market risk over the next month (as of 31 Dec 2020)}
+
+The $h$-day variance forecast is
+$\E_t\sigma^2_{t+h}=\bar\sigma^2+(\alpha+\beta)^{h-1}(\sigma^2_{t+1}-\bar\sigma^2)$, and the
+one-month variance is the sum of 21 such forecasts (one-month s.d.\ 3.0\%, against 5.0\% at
+the long-run level). The ranges and loss probabilities come from 200,000 simulated 21-day
+paths of the fitted model with Gaussian daily shocks, because the monthly GARCH return is not
+exactly Gaussian.
+
+\begin{itemize}
+\item \textbf{Risk is low right now.} The model estimates market volatility at about 9\% a
+year, half its long-run level of 17\%. The end of 2020 was quiet, and quiet periods tend to
+persist.
+\item \textbf{It will drift back up slowly.} The gap to normal, measured in variance, halves
+about every two months, so the forecast rises only to about 12\% by late January. A typical
+monthly move is $\pm3\%$ (against $\pm5\%$ normally). In 19 of 20 simulated months the market
+ends between $-4.5\%$ and $+7.5\%$, and a loss worse than 6\% occurs about 1 month in 100.
+\item \textbf{This can change overnight.} A single large shock raises the forecast
+immediately: on 17 March 2020 the same model put volatility near 100\% a year. The model also
+assumes bell-curve shocks, so it understates crash risk.
+\end{itemize}
+
+%=====================================================================
+\section{Question 2 (PhD): Gaussian GARCH-in-mean}
+
+\textbf{MLE objective.} With
+$r_t=\mu+\lambda\,g(\sigma_t^2)+\varepsilon_t$, $\varepsilon_t=\sigma_tz_t$,
+$z_t\sim N(0,1)$, $\sigma_t^2=\omega+\alpha\varepsilon_{t-1}^2+\beta\sigma_{t-1}^2$, and
+$g(\sigma^2)=\sigma^2$ (or $\sigma$, $\log\sigma^2$),
+\[
+\hat\theta=\arg\max_{\theta}\; -\frac12\sum_{t=1}^T\left[\log2\pi+\log\sigma_t^2(\theta)
++\frac{\big(r_t-\mu-\lambda g(\sigma_t^2(\theta))\big)^2}{\sigma_t^2(\theta)}\right]
+\quad\text{s.t. } \omega>0,\ \alpha,\beta\ge0,\ \alpha+\beta<1 .
+\]
+Because $\varepsilon_t$ now depends on the variance parameters, the two recursions must be
+run jointly ($\sigma_t^2$ from $\varepsilon_{t-1}$, then $\varepsilon_t$ from $\sigma_t^2$).
+The information matrix is no longer block-diagonal, so the mean and variance parameters must
+be estimated jointly. (For illustration, with $g=\sigma^2$: $\hat\lambda=0.041$ (0.013) for the
+market and 0.012 (0.009) for MSFT.)
+
+\textbf{Return predictors $X_t$.} Replace the mean by
+$m_t=\mu+\lambda g(\sigma_t^2)+\gamma'X_{t-1}$ and use $\varepsilon_t=r_t-m_t$ in the same
+objective; the variance recursion is then fed this residual. $X_{t-1}$ must be known at $t-1$
+and must not be collinear with $g(\sigma_t^2)$.
+
+\textbf{Variance predictors $Q_t$.} Use
+$\sigma_t^2=\omega+\alpha\varepsilon_{t-1}^2+\beta\sigma_{t-1}^2+\delta'Q_{t-1}$ in the same
+objective, with four additional conditions.
+(i) \emph{Positivity}: $\sigma_t^2>0$ is no longer implied by $\omega,\alpha,\beta\ge0$.
+Impose $Q_t\ge0$ and $\delta\ge0$, restrict $\omega+\delta'Q_t>0$ on the support of $Q$, or
+reparametrize (e.g.\ $\exp(\delta'Q_{t-1})$ or an EGARCH-X model for $\log\sigma_t^2$).
+(ii) \emph{Predetermined}: $Q_{t-1}\in\mathcal F_{t-1}$, or $\sigma_t^2$ is not a conditional
+variance. (iii) \emph{Stationarity}: besides $\alpha+\beta<1$, $Q_t$ must be strictly
+stationary and ergodic with $\E|Q_t|<\infty$, so that
+$\E\sigma^2=(\omega+\delta'\E Q)/(1-\alpha-\beta)$ exists; a trending $Q$ makes $\sigma_t^2$
+non-stationary. With identification, these conditions give consistency. Asymptotic normality
+additionally needs an interior true parameter, $\E z_t^4<\infty$, and sufficient moments of
+$Q_t$ and $\sigma_t^2$ (Francq and Zako\"ian, 2004; Han and Kristensen, 2014).
+(iv) \emph{Identification}: $Q$ must vary over time and must not be collinear with
+$\varepsilon_{t-1}^2$ or $\sigma_{t-1}^2$. For testing: if $\delta\ge0$ is imposed,
+$\delta=0$ lies on the boundary, and for a scalar $\delta$ with the other parameters interior
+the LR statistic converges to $\tfrac12\chi^2_0+\tfrac12\chi^2_1$ rather than $\chi^2_1$
+(Andrews, 2001).
+
+%=====================================================================
+\section{\texorpdfstring{Question 3 (PhD): GJR-GARCH(1,1,1) with Student-$t$ innovations}{Question 3 (PhD): GJR-GARCH(1,1,1) with Student-t innovations}}
+
+\textbf{Model.} $r_t=\mu+\varepsilon_t$, $\varepsilon_t=\sigma_tz_t$, with $z_t$ i.i.d.\
+standardized $t_\nu$ (mean 0, variance 1, $\nu>2$), and
+\[
+\sigma_t^2=\omega+\big(\alpha+\gamma\,\1\{\varepsilon_{t-1}<0\}\big)\varepsilon_{t-1}^2+\beta\sigma_{t-1}^2 .
+\]
+The log likelihood is
+\[
+\mathcal L=\sum_t\left[\log\Gamma\!\left(\tfrac{\nu+1}{2}\right)-\log\Gamma\!\left(\tfrac{\nu}{2}\right)
+-\tfrac12\log\big(\pi(\nu-2)\big)-\tfrac12\log\sigma_t^2
+-\tfrac{\nu+1}{2}\log\!\left(1+\frac{\varepsilon_t^2}{(\nu-2)\sigma_t^2}\right)\right].
+\]
+
+\textbf{Non-integration condition.} Since $\varepsilon_{t-1}^2=\sigma_{t-1}^2z_{t-1}^2$ and
+$\1\{\varepsilon_{t-1}<0\}=\1\{z_{t-1}<0\}$,
+\[
+\sigma_t^2=\omega+\sigma_{t-1}^2\big[\alpha z_{t-1}^2+\gamma z_{t-1}^2\1\{z_{t-1}<0\}+\beta\big].
+\]
+$z_{t-1}$ is independent of $\sigma_{t-1}^2\in\mathcal F_{t-2}$, $\E z^2=1$, and by symmetry of
+the standardized $t$, $\E[z^2\1\{z<0\}]=\tfrac12$. Hence
+\[
+\E_{t-2}\sigma_t^2=\omega+\phi\,\sigma_{t-1}^2,\qquad \phi=\alpha+\tfrac12\gamma+\beta,
+\]
+and iterating gives
+$\E_{t-k}\sigma_t^2=\omega\sum_{j=0}^{k-2}\phi^j+\phi^{k-1}\sigma_{t-k+1}^2$. Variance shocks
+die out and $\E\varepsilon_t^2=\omega/(1-\phi)$ is finite if and only if
+\[
+\boxed{\ \alpha+\tfrac12\gamma+\beta<1\ }
+\qquad(\omega>0,\ \alpha\ge0,\ \alpha+\gamma\ge0,\ \beta\ge0,\ \nu>2).
+\]
+At $\phi=1$ the variance is integrated: shocks are permanent and the unconditional variance
+does not exist.
+
+\begin{table}[!htb]
+\centering
+\small
+\begin{tabular}{lrrrrrrrr}
+\toprule
+ & $\mu$ & $\omega$ & $\alpha$ & $\gamma$ & $\beta$ & $\nu$ & $\phi$ & $\log L$ \\
+\midrule
+Market & 0.065 & 0.0137 & 0.009 & 0.163 & 0.895 & 6.9 & 0.985 & $-9{,}832.4$ \\
+       & (0.008) & (0.0024) & (0.006) & (0.018) & (0.010) & (0.57) & (0.003) & \\
+MSFT$^\dagger$ & 0.073 & 0.032 & 0.056 & 0.068 & 0.910 & 5.3 & 0.99999 & $-15{,}220.2$ \\
+       & (0.016) & (0.010) & (0.010) & (0.015) & (0.014) & (0.32) & -- & \\
+\bottomrule
+\end{tabular}
+\caption{GJR-GARCH-$t$ estimates; robust s.e.\ in parentheses.
+$^\dagger$The constraint $\phi\le1-10^{-5}$ imposed in estimation binds for MSFT
+($\hat\phi=0.99999$). Without it $\hat\phi=1.0017$ with a log-likelihood gain of 0.12
+(LR = 0.24). The MSFT standard errors are computed as if the estimate were interior and are
+only indicative.}
+\end{table}
+
+\begin{table}[!htb]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+ & GARCH-$N$ & GARCH-$t$ & GJR-$N$ & GJR-$t$ \\
+\midrule
+Market & $-10{,}110.2$ & $-9{,}927.5$ & $-9{,}999.7$ & $-9{,}832.4$ \\
+MSFT & $-15{,}649.6$ & $-15{,}238.1$ & $-15{,}624.0$ & $-15{,}220.2$ \\
+\bottomrule
+\end{tabular}
+\caption{Log likelihood by model: which feature (fat tails or leverage) improves the fit.}
+\end{table}
+
+\textbf{Comparison with GARCH(1,1).} GJR-$t$ raises the log likelihood by 278 for the market
+and 429 for MSFT. Fat tails account for most of the gain ($\hat\nu=6.9$ and 5.3; $+183$ and
+$+412$ from $t$ innovations alone). Leverage adds $+111$ for the market but only $+25$ for
+MSFT. For the market, the symmetric $\alpha$ collapses to 0.009 (insignificant) and
+$\gamma=0.163$ carries the ARCH effect. Its persistence is unchanged ($\phi=0.985$, s.e.\
+0.0035, $t=4.3$ against one), and its long-run volatility falls from 17.4\% to 15.2\%. For
+MSFT, $\hat\phi$ sits on the constraint, so its variance is indistinguishable from an
+integrated process and its long-run variance is not identified.
+
+\textbf{Leverage: market vs MSFT.} Leverage is much stronger for the market. Bad news raises
+the market's next-day variance 19 times as much as good news ($\alpha+\gamma=0.171$ vs
+$\alpha=0.009$), against 2.2 times for MSFT (0.124 vs 0.056). MSFT's $\gamma$ is 0.42 times
+the market's, close to the market-related share of MSFT's variance (0.36--0.41). This argues
+against financial leverage, since Microsoft had essentially no debt, and for a systematic
+channel: volatility feedback and correlation spikes in selloffs. MSFT's firm-specific news
+raises its volatility whether the news is good or bad.
+
+\begin{figure}[!htb]
+\centering
+\includegraphics[width=\textwidth]{figures/news_impact.png}
+\caption{News impact curves: next-day variance after a shock $\varepsilon_{t-1}$, given that
+the previous variance equals the sample variance $s^2$. Axes are scaled by the sample s.d.\
+because the long-run variance does not exist for MSFT's GJR-$t$ estimate.}
+\end{figure}
+
+\end{document}
