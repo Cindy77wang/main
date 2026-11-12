@@ -10,6 +10,8 @@
 \usepackage[font=small,labelfont=bf]{caption}
 \usepackage{xcolor}
 \usepackage{titlesec}
+\usepackage{enumitem}
+\setlist[itemize]{topsep=2pt,itemsep=3pt,parsep=0pt}
 \usepackage[hidelinks]{hyperref}
 
 \titleformat{\section}{\large\bfseries}{}{0pt}{}
@@ -248,23 +250,23 @@ normal even with normal daily shocks, so the ranges and loss probabilities below
 200,000 simulated 21-day paths of the fitted model. The explanation for a reader who has
 never heard of GARCH comes down to three points.
 
-First, market risk is low right now. The model reads the size of recent daily moves and
+\begin{itemize}
+\item Market risk is low right now. The model reads the size of recent daily moves and
 concludes that the market is currently running at about 9\% volatility a year, roughly half
 its long-run average of 17\%. The last weeks of 2020 were quiet, and quiet periods in the
 stock market tend to last.
-
-Second, risk should creep back toward normal, but slowly. The distance between today's risk
+\item Risk should creep back toward normal, but slowly. The distance between today's risk
 and the long-run level, measured in variance, shrinks by half about every two months, so by
-the end of January the model's estimate of annual volatility has only risen to about 12\%. In practice
-this means a typical month ahead moves the market by about 3\% up or down, against about 5\%
-in an ordinary month. In 19 of 20 simulated months the market ends somewhere between a 4.5\%
-loss and a 7.5\% gain, and a loss of more than 6\% happens in about 1 month out of 100.
-
-Third, these numbers can change in a single day. The forecast is driven by the latest moves,
+the end of January the model's estimate of annual volatility has only risen to about 12\%. In
+practice this means a typical month ahead moves the market by about 3\% up or down, against
+about 5\% in an ordinary month. In 19 of 20 simulated months the market ends somewhere between
+a 4.5\% loss and a 7.5\% gain, and a loss of more than 6\% happens in about 1 month out of 100.
+\item These numbers can change in a single day. The forecast is driven by the latest moves,
 so one large drop would raise it immediately. On 17 March 2020 the same model put annual
 volatility near 100\%. The model also treats daily surprises as bell-shaped, while real market
 returns have more extreme days than that, so the true chance of a crash is higher than these
 figures suggest.
+\end{itemize}
 
 %=====================================================================
 \section{Question 2 (PhD): Gaussian GARCH-in-mean}
