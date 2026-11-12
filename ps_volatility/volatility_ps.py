@@ -280,7 +280,7 @@ def main():
         g["at_boundary"] = bool(pers > 1 - 1e-5 - 1e-9)
         if g["at_boundary"]:
             g.update({"half_life": None, "uncond_var": None, "uncond_ann_vol": None,
-                      "boundary_note": "alpha + beta on the imposed bound; long-run quantities not identified"})
+                      "boundary_note": "alpha + beta on the imposed bound; long-run quantities unavailable"})
         g["s2"] = garch_filter(r - mu, om, a, b)
         z = (r - mu) / np.sqrt(g["s2"])
         rz2 = acf(z**2, L)
@@ -339,6 +339,9 @@ def main():
                        "persistence_inf": lincomb(gi, [0, 0, 1, 1]),
                        "persistence": a_i + b_i, "half_life": np.log(.5) / np.log(a_i + b_i),
                        "uncond_ann_vol": np.sqrt(252 * om_i / (1 - a_i - b_i))}
+    gju = fit_gjr_t(resid)
+    c["idio_gjr_t"] = {"theta": gju["theta"].tolist(), "se": gju["se"].tolist(),
+                       "names": ["mu", "omega", "alpha", "gamma", "beta", "nu"]}
     rho_e2 = acf(resid**2, L)
     c["idio_acf_r2"] = rho_e2.tolist()
 
@@ -490,6 +493,10 @@ def main():
         k = keys[name]
         gm = fit_garchm_n(r, fits[k]["theta"])
         out[k + "_garchm"] = {"theta": gm["theta"].tolist(), "se": gm["se"].tolist(), "ll": gm["ll"]}
+    # If only market risk is priced, MSFT's premium is b * lambda_m * sigma2_m, i.e. lambda per unit of
+    # MSFT's total variance equals lambda_m * R^2 / b.
+    out["msft_garchm"]["lambda_capm_implied"] = (out["mkt_garchm"]["theta"][1]
+                                                 * out["q1c"]["R2_full"] / out["q1c"]["beta_full"])
 
     # ---------------- Q3 GJR-GARCH(1,1,1) with Student t ----------------
     for name, r in series.items():
@@ -512,10 +519,29 @@ def main():
             gj["uncond_ann_vol"] = None
             gj["persistence_inf"] = {"est": float(pers), "se": None, "t_vs_1": None}
             gj["boundary_note"] = ("persistence estimate is on the imposed bound alpha + gamma/2 + beta "
-                                   "<= 1 - 1e-5: half-life, long-run volatility and the test of phi = 1 "
-                                   "are not identified; standard errors in 'se' and 'se_mle' are computed "
-                                   "as if the estimate were interior and are not valid inference")
+                                   "<= 1 - 1e-5 and the unconstrained estimate is above one, so the "
+                                   "long-run variance is infinite there and cannot be estimated reliably; "
+                                   "half-life and the test of phi = 1 are unavailable; standard errors in "
+                                   "'se' and 'se_mle' are computed as if the estimate were interior and "
+                                   "are not valid inference")
         s2j = garch_filter(r - mu, om, a, b, gm_)
+        # phi = alpha + gamma * E[z^2 1{z<0}] + beta; the model's symmetric t sets the middle term to
+        # 1/2. Check it on the standardized residuals and recompute persistence with the sample value.
+        zj = (r - mu) / np.sqrt(s2j)
+        A, B = zj**2 * (zj < 0), zj**2
+        kap = A.sum() / B.sum()
+        se_kap = np.sqrt(np.var(A - kap * B) / A.size) / B.mean()
+        phi_emp = a + gm_ * kap + b
+        pe = {"kappa": float(kap), "kappa_se": float(se_kap), "z_skew": float(stats.skew(zj)),
+              "z_excess_kurtosis": float(stats.kurtosis(zj)), "phi": float(phi_emp)}
+        if not gj["at_boundary"]:
+            w = np.array([0, 0, 1, kap, 1, 0])
+            se_phi = float(np.sqrt(w @ gj["V"] @ w + (gm_ * se_kap) ** 2))
+            pe.update({"se": se_phi, "t_vs_1": (1 - phi_emp) / se_phi,
+                       "uncond_ann_vol": float(np.sqrt(252 * om / (1 - phi_emp))) if phi_emp < 1 else None})
+        else:
+            pe.update({"se": None, "t_vs_1": None, "uncond_ann_vol": None})
+        gj["persistence_empirical_weight"] = pe
         try:
             from arch import arch_model
             am = arch_model(r, mean="Constant", vol="GARCH", p=1, o=1, q=1, dist="t").fit(disp="off")

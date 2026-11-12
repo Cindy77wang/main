@@ -438,6 +438,32 @@
    "half_life": 147.34306381214168,
    "uncond_ann_vol": 24.3830005588318
   },
+  "idio_gjr_t": {
+   "theta": [
+    -0.047254178363614514,
+    0.016660506488219533,
+    0.06199141609657114,
+    0.01722065271435916,
+    0.9288543004744767,
+    4.1975230606883
+   ],
+   "se": [
+    0.011768726121079813,
+    0.017388220749639506,
+    0.032981502205224576,
+    0.022814644507249106,
+    0.04289073889494807,
+    0.22523658428776794
+   ],
+   "names": [
+    "mu",
+    "omega",
+    "alpha",
+    "gamma",
+    "beta",
+    "nu"
+   ]
+  },
   "idio_acf_r2": [
    0.08283674039203047,
    0.08807351548322861,
@@ -784,7 +810,8 @@
    0.024459377059567956,
    0.030327730975860768
   ],
-  "ll": -15648.530371134904
+  "ll": -15648.530371134904,
+  "lambda_capm_implied": 0.0145944444109921
  },
  "mkt_ll_ladder": {
   "garch_n": -10110.20849504889,
@@ -882,6 +909,16 @@
   "half_life": 46.33486304327559,
   "uncond_ann_vol": 15.243353396907583,
   "news_ratio": 19.505138502286947,
+  "persistence_empirical_weight": {
+   "kappa": 0.5831973214474699,
+   "kappa_se": 0.01199697648557507,
+   "z_skew": -0.5896683466497988,
+   "z_excess_kurtosis": 2.3181007198780783,
+   "phi": 0.9986799738848182,
+   "se": 0.004082862649444254,
+   "t_vs_1": 0.3233089693481265,
+   "uncond_ann_vol": 51.12412183579139
+  },
   "arch_check": [
    0.0646707056162581,
    0.013663844364102735,
@@ -988,7 +1025,17 @@
   "half_life": null,
   "uncond_ann_vol": null,
   "news_ratio": 2.217649269188031,
-  "boundary_note": "persistence estimate is on the imposed bound alpha + gamma/2 + beta <= 1 - 1e-5: half-life, long-run volatility and the test of phi = 1 are not identified; standard errors in 'se' and 'se_mle' are computed as if the estimate were interior and are not valid inference",
+  "boundary_note": "persistence estimate is on the imposed bound alpha + gamma/2 + beta <= 1 - 1e-5 and the unconstrained estimate is above one, so the long-run variance is infinite there and cannot be estimated reliably; half-life and the test of phi = 1 are unavailable; standard errors in 'se' and 'se_mle' are computed as if the estimate were interior and are not valid inference",
+  "persistence_empirical_weight": {
+   "kappa": 0.47221944670123706,
+   "kappa_se": 0.01864029183711302,
+   "z_skew": 0.0028306506246753415,
+   "z_excess_kurtosis": 7.6270399562158815,
+   "phi": 0.9981067967006992,
+   "se": null,
+   "t_vs_1": null,
+   "uncond_ann_vol": null
+  },
   "arch_check": [
    0.07259713465631347,
    0.03211529976124794,
