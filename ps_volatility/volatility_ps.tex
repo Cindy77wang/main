@@ -317,13 +317,13 @@ make $\sigma_t^2$ non-stationary however small $\alpha+\beta$ is. These conditio
 with identification, give consistency of the (Q)MLE. Asymptotic normality needs more: an
 interior true parameter, $\E z_t^4<\infty$ so that the score has finite variance, and enough
 moments of $Q_t$ and $\sigma_t^2$ for the score and Hessian to obey a law of large numbers and a
-central limit theorem (Francq and Zako\"ian, 2004; Han and Kristensen, 2014). Identification
+central limit theorem. Identification
 requires that $Q$ vary over time and not be collinear with $\varepsilon_{t-1}^2$ or
 $\sigma_{t-1}^2$, since otherwise $\omega$, $\delta$ and $\beta$ cannot be separated. Finally,
 the sign restriction matters for testing. If $\delta\ge0$ is imposed, $\delta=0$ lies on the
 boundary of the parameter space, and for a scalar $\delta$ with the other parameters interior
 the likelihood-ratio statistic converges to $\tfrac12\chi^2_0+\tfrac12\chi^2_1$ rather than
-$\chi^2_1$ (Andrews, 2001).
+$\chi^2_1$.
 
 %=====================================================================
 \section{\texorpdfstring{Question 3 (PhD): GJR-GARCH(1,1,1) with Student-$t$ innovations}{Question 3 (PhD): GJR-GARCH(1,1,1) with Student-t innovations}}
@@ -422,11 +422,11 @@ boundary.
 The leverage effect is far stronger for the market. Bad news raises the market's next-day
 variance 19 times as much as good news of the same size ($\alpha+\gamma=0.171$ against
 $\alpha=0.009$), while for MSFT the ratio is 2.2 (0.124 against 0.056). This is hard to
-reconcile with the original financial-leverage story of Black (1976), in which a falling
-stock price raises the debt-to-equity ratio and therefore equity volatility. Microsoft had no
+reconcile with the financial-leverage explanation, in which a falling stock price raises the
+debt-to-equity ratio and therefore equity volatility. Microsoft had no
 long-term debt until 2009 and little relative to its market value afterwards, yet the
 asymmetry is weak for MSFT and very strong for the index. A systematic channel fits better.
-Under volatility feedback (Campbell and Hentschel, 1992), news that raises expected market
+Under volatility feedback, news that raises expected market
 volatility raises required returns and pushes prices down at the same moment, and
 correlations across stocks rise in selloffs, so falling prices and rising volatility arrive
 together in the aggregate. Firm-specific news works differently, because a large earnings surprise
