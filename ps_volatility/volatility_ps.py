@@ -8,6 +8,11 @@ the CRSP value-weighted return (vwretd); MSFT is its CRSP holding-period return.
 
 Every likelihood is coded by hand and maximized with scipy; the `arch` package is used
 only as an independent cross-check of the point estimates.
+
+This file produces the numbers (results.json) and figures (figures/). The written answers,
+including the prior on volatility clustering, the log-likelihood derivations, the three
+market-risk bullet points, the GARCH-in-mean discussion and the GJR stationarity derivation,
+are in volatility_ps.tex / Volatility_PS_solutions.pdf.
 """
 import argparse
 import json
@@ -272,6 +277,10 @@ def main():
         g["persistence_inf"] = lincomb(g, [0, 0, 1, 1])
         g.update({"persistence": pers, "half_life": np.log(0.5) / np.log(pers),
                   "uncond_var": om / (1 - pers), "uncond_ann_vol": np.sqrt(252 * om / (1 - pers))})
+        g["at_boundary"] = bool(pers > 1 - 1e-5 - 1e-9)
+        if g["at_boundary"]:
+            g.update({"half_life": None, "uncond_var": None, "uncond_ann_vol": None,
+                      "boundary_note": "alpha + beta on the imposed bound; long-run quantities not identified"})
         g["s2"] = garch_filter(r - mu, om, a, b)
         z = (r - mu) / np.sqrt(g["s2"])
         rz2 = acf(z**2, L)
@@ -495,6 +504,17 @@ def main():
         gj.update({"persistence": pers, "half_life": np.log(.5) / np.log(pers),
                    "uncond_ann_vol": np.sqrt(252 * om / (1 - pers)),
                    "news_ratio": (a + gm_) / a if a > 1e-6 else np.inf})
+        if gj["at_boundary"]:
+            # On the bound phi <= 1 - 1e-5 the long-run variance omega/(1 - phi) is not identified
+            # (the unconstrained estimate is above one), and interior asymptotics do not apply.
+            # Report these quantities as unavailable instead of as numbers.
+            gj["half_life"] = None
+            gj["uncond_ann_vol"] = None
+            gj["persistence_inf"] = {"est": float(pers), "se": None, "t_vs_1": None}
+            gj["boundary_note"] = ("persistence estimate is on the imposed bound alpha + gamma/2 + beta "
+                                   "<= 1 - 1e-5: half-life, long-run volatility and the test of phi = 1 "
+                                   "are not identified; standard errors in 'se' and 'se_mle' are computed "
+                                   "as if the estimate were interior and are not valid inference")
         s2j = garch_filter(r - mu, om, a, b, gm_)
         try:
             from arch import arch_model

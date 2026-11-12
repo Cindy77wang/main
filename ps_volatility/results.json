@@ -287,6 +287,7 @@
   "half_life": 47.088757820132756,
   "uncond_var": 1.1961312051093487,
   "uncond_ann_vol": 17.361597382947107,
+  "at_boundary": false,
   "z_kurtosis": 4.884576072612152,
   "z2_lb": [
    25.248163270957328,
@@ -357,6 +358,7 @@
   "half_life": 47.30689361052098,
   "uncond_var": 4.562940708254052,
   "uncond_ann_vol": 33.90960127279619,
+  "at_boundary": false,
   "z_kurtosis": 8.813316436150256,
   "z2_lb": [
    11.596780950638406,
@@ -976,16 +978,17 @@
   "msg": "Optimization terminated successfully",
   "persistence_inf": {
    "est": 0.9999900000000018,
-   "se": 0.0035796534460745618,
-   "t_vs_1": 0.002793566513860191
+   "se": null,
+   "t_vs_1": null
   },
   "persistence_exact": "0.9999900000000018",
   "constraint": "alpha + gamma/2 + beta <= 1 - 1e-5",
   "at_boundary": true,
   "persistence": 0.9999900000000018,
-  "half_life": 69314.37149445484,
-  "uncond_ann_vol": 899.5417017040357,
+  "half_life": null,
+  "uncond_ann_vol": null,
   "news_ratio": 2.217649269188031,
+  "boundary_note": "persistence estimate is on the imposed bound alpha + gamma/2 + beta <= 1 - 1e-5: half-life, long-run volatility and the test of phi = 1 are not identified; standard errors in 'se' and 'se_mle' are computed as if the estimate were interior and are not valid inference",
   "arch_check": [
    0.07259713465631347,
    0.03211529976124794,
