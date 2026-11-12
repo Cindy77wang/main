@@ -20,6 +20,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 
 OUT = Path(__file__).resolve().parent
 FIG = OUT / "figures"
@@ -231,6 +232,7 @@ def main():
             ax.axhline(0, color="k", lw=0.6)
             ax.set_title(f"{name}: ACF of {lab}", fontsize=10)
             ax.set_ylim(-0.1, 0.5)
+            ax.yaxis.set_major_locator(MultipleLocator(0.05))
             ax.grid(axis="y", alpha=0.3)
     for ax in axes[1]:
         ax.set_xlabel("lag (trading days)")
@@ -250,6 +252,8 @@ def main():
     ax[0].set_title(r"ACF of $(r_t-\bar r)^2$", fontsize=10)
     ax[1].set_title(r"ACF of $|r_t|$ (robust to outliers)", fontsize=10)
     for a in ax:
+        a.yaxis.set_major_locator(MultipleLocator(0.05))
+        a.set_xticks([1, 5, 10, 15, 20])
         a.axhline(0, color="k", lw=0.6)
         a.set_xlabel("lag")
         a.grid(alpha=0.3)
