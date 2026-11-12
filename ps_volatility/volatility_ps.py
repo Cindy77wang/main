@@ -119,8 +119,16 @@ def fit(f, x0, bounds, r, cons=()):
     Hinv = np.linalg.inv(-H)
     V_rob = Hinv @ (G.T @ G) @ Hinv
     V_mle = Hinv
-    return {"theta": th, "se": np.sqrt(np.diag(V_rob)), "se_mle": np.sqrt(np.diag(V_mle)),
+    return {"theta": th, "V": V_rob, "se": np.sqrt(np.diag(V_rob)), "se_mle": np.sqrt(np.diag(V_mle)),
             "ll": -res.fun, "success": bool(res.success), "msg": res.message}
+
+
+def lincomb(g, w):
+    """Estimate, robust s.e. (delta method, incl. covariances) and t-stat vs 1 of w'theta."""
+    w = np.asarray(w, float)
+    est = float(w @ g["theta"])
+    se = float(np.sqrt(w @ g["V"] @ w))
+    return {"est": est, "se": se, "t_vs_1": (1 - est) / se}
 
 
 def fit_garch_n(r):
@@ -257,6 +265,7 @@ def main():
         g = fit_garch_n(r)
         mu, om, a, b = g["theta"]
         pers = a + b
+        g["persistence_inf"] = lincomb(g, [0, 0, 1, 1])
         g.update({"persistence": pers, "half_life": np.log(0.5) / np.log(pers),
                   "uncond_var": om / (1 - pers), "uncond_ann_vol": np.sqrt(252 * om / (1 - pers))})
         g["s2"] = garch_filter(r - mu, om, a, b)
@@ -314,6 +323,7 @@ def main():
     mu_i, om_i, a_i, b_i = gi["theta"]
     s2e = garch_filter(resid - mu_i, om_i, a_i, b_i)
     c["idio_garch"] = {"theta": gi["theta"].tolist(), "se": gi["se"].tolist(),
+                       "persistence_inf": lincomb(gi, [0, 0, 1, 1]),
                        "persistence": a_i + b_i, "half_life": np.log(.5) / np.log(a_i + b_i),
                        "uncond_ann_vol": np.sqrt(252 * om_i / (1 - a_i - b_i))}
     rho_e2 = acf(resid**2, L)
@@ -324,6 +334,11 @@ def main():
     share_add = s2_sys / (s2_sys + s2e)
     c["share_add_mean"] = float(share_add.mean())
     c["share_add_q10_q90"] = [float(np.quantile(share_add, .1)), float(np.quantile(share_add, .9))]
+    ratio_fit = (s2_sys + s2e) / s2i
+    c["additive_vs_msft_garch"] = {"mean_ratio": float(ratio_fit.mean()),
+                                   "q10_q90": [float(np.quantile(ratio_fit, .1)), float(np.quantile(ratio_fit, .9))],
+                                   "corr_log": float(np.corrcoef(np.log(s2_sys + s2e), np.log(s2i))[0, 1])}
+    c["ratio_share_above_one_frac"] = float(np.nanmean(share_roll > 1))
     c["mkt_part_vol_mean"] = float(np.mean(np.sqrt(252 * s2_sys)))
     c["firm_vol_mean"] = float(np.mean(np.sqrt(252 * s2e)))
     c["frac_days_share_above_half"] = float(np.mean(share_add > 0.5))
@@ -469,6 +484,10 @@ def main():
         gj = fit_gjr_t(r)
         mu, om, a, gm_, b, nu = gj["theta"]
         pers = a + gm_ / 2 + b
+        gj["persistence_inf"] = lincomb(gj, [0, 0, 1, 0.5, 1, 0])
+        gj["persistence_exact"] = repr(float(pers))
+        gj["constraint"] = "alpha + gamma/2 + beta <= 1 - 1e-5"
+        gj["at_boundary"] = bool(pers > 1 - 1e-5 - 1e-9)
         gj.update({"persistence": pers, "half_life": np.log(.5) / np.log(pers),
                    "uncond_ann_vol": np.sqrt(252 * om / (1 - pers)),
                    "news_ratio": (a + gm_) / a if a > 1e-6 else np.inf})
@@ -489,25 +508,34 @@ def main():
                 "gjr_t": gj["ll"]}
         except Exception:
             pass
+        if gj["at_boundary"]:
+            v = np.var(r)
+            res_u = optimize.minimize(lambda th: -np.sum(ll_gjr_t(th, r)), gj["theta"], method="SLSQP",
+                                      bounds=[(None, None), (1e-8, None), (0, 1), (-1, 1), (0, 1), (2.05, 200)],
+                                      constraints=({"type": "ineq", "fun": lambda th: th[2] + th[3]},),
+                                      options={"maxiter": 2000, "ftol": 1e-12})
+            tu = res_u.x
+            gj["unconstrained"] = {"theta": tu.tolist(), "phi": float(tu[2] + tu[3] / 2 + tu[4]),
+                                   "ll": float(-res_u.fun), "ll_gain": float(-res_u.fun - gj["ll"])}
         out[k + "_gjr"] = {kk: (vv.tolist() if isinstance(vv, np.ndarray) else vv) for kk, vv in gj.items()}
         fits[k + "_gjr_s2"] = s2j
 
-    # news impact curves
+    # news impact curves, evaluated at a common point: sigma2_{t-1} = sample variance s^2 and shocks
+    # in units of the sample s.d. (the long-run variance does not exist when phi -> 1)
     fig, ax = plt.subplots(1, 2, figsize=(10, 3.3))
     z = np.linspace(-5, 5, 201)
-    for j, name in enumerate(series):
+    for j, (name, r) in enumerate(series.items()):
         k = keys[name]
+        s2bar = np.var(r)
         mu, om, a, b = fits[k]["theta"]
-        vbar_g = om / (1 - a - b)
-        nic_g = om + a * (z**2) * vbar_g + b * vbar_g
+        nic_g = om + a * z**2 * s2bar + b * s2bar
         mu, om2, a2, gm2, b2, nu = out[k + "_gjr"]["theta"]
-        vbar_j = om2 / (1 - a2 - gm2 / 2 - b2)
-        nic_j = om2 + (a2 + gm2 * (z < 0)) * z**2 * vbar_j + b2 * vbar_j
-        ax[j].plot(z, nic_g / vbar_g, color="0.4", label="GARCH(1,1)-N")
-        ax[j].plot(z, nic_j / vbar_j, color=colors[name], label="GJR-GARCH-t")
+        nic_j = om2 + (a2 + gm2 * (z < 0)) * z**2 * s2bar + b2 * s2bar
+        ax[j].plot(z, nic_g / s2bar, color="0.4", label="GARCH(1,1)-N")
+        ax[j].plot(z, nic_j / s2bar, color=colors[name], label="GJR-GARCH-t")
         ax[j].set_title(f"{name}: news impact curve", fontsize=10)
-        ax[j].set_xlabel(r"shock $\varepsilon_{t-1}$ in units of long-run s.d.")
-        ax[j].set_ylabel(r"$\sigma^2_t/\bar\sigma^2$")
+        ax[j].set_xlabel(r"shock $\varepsilon_{t-1}$ in units of the sample s.d. $s$")
+        ax[j].set_ylabel(r"$\sigma^2_t/s^2$  (given $\sigma^2_{t-1}=s^2$)")
         ax[j].grid(alpha=0.3)
         ax[j].legend(fontsize=8)
     fig.tight_layout()
