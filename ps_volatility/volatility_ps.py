@@ -155,6 +155,15 @@ def acf(x, nlags):
     return np.array([np.dot(x[k:], x[:-k]) / d for k in range(1, nlags + 1)])
 
 
+def acf_robust_se(x, nlags):
+    """Heteroskedasticity-robust s.e. of the lag-k autocorrelation (Taylor 1984; Lo-MacKinlay):
+    se_k = sqrt(sum_t x_t^2 x_{t-k}^2) / sum_t x_t^2, x demeaned. Valid under GARCH-type
+    dependence in the variance, where the i.i.d. band 1/sqrt(T) is too narrow."""
+    x = x - x.mean()
+    d = np.dot(x, x)
+    return np.array([np.sqrt(np.sum(x[k:] ** 2 * x[:-k] ** 2)) / d for k in range(1, nlags + 1)])
+
+
 def ljung_box(rho, T):
     k = np.arange(1, rho.size + 1)
     q = T * (T + 2) * np.sum(rho**2 / (T - k))
@@ -188,18 +197,29 @@ def main():
     colors = {"Market (CRSP VW)": "#1f4e79", "MSFT": "#c0504d"}
     for j, (name, r) in enumerate(series.items()):
         k = keys[name]
-        rho_r, rho_r2 = acf(r, L), acf(r**2, L)
-        rho_abs = acf(np.abs(r), L)
+        x = r - r.mean()
+        rho_r, rho_r2 = acf(r, L), acf(x**2, L)   # squared *demeaned* returns = eps_t^2
+        rho_abs = acf(np.abs(x), L)
+        se_rob = acf_robust_se(r, L)
+        out[k + "_acf_r_robust_se"] = se_rob.tolist()
+        out[k + "_acf_r_out_iid"] = int(np.sum(np.abs(rho_r) > band))
+        out[k + "_acf_r_out_robust"] = int(np.sum(np.abs(rho_r) > 1.96 * se_rob))
+        out[k + "_acf_r2_out_iid"] = int(np.sum(np.abs(rho_r2) > band))
+        out[k + "_acf_r2_mean"] = float(rho_r2.mean())
+        out[k + "_acf_r2_lag20_over_lag1"] = float(rho_r2[-1] / rho_r2[0])
         out[k + "_acf_r"] = rho_r.tolist()
         out[k + "_acf_r2"] = rho_r2.tolist()
         out[k + "_acf_abs"] = rho_abs.tolist()
         out[k + "_lb_r"] = ljung_box(rho_r, T)
         out[k + "_lb_r2"] = ljung_box(rho_r2, T)
         out[k + "_lb_abs"] = ljung_box(rho_abs, T)
-        for i, (rho, lab) in enumerate([(rho_r, r"$r_t$"), (rho_r2, r"$r_t^2$")]):
+        for i, (rho, lab) in enumerate([(rho_r, r"$r_t$"), (rho_r2, r"$(r_t-\bar r)^2$")]):
             ax = axes[i, j]
             ax.bar(lags, rho, color=colors[name], width=0.65)
             ax.axhspan(-band, band, color="0.85", zorder=0)
+            if i == 0:
+                ax.plot(lags, 1.96 * se_rob, "k--", lw=0.7)
+                ax.plot(lags, -1.96 * se_rob, "k--", lw=0.7)
             ax.axhline(0, color="k", lw=0.6)
             ax.set_title(f"{name}: ACF of {lab}", fontsize=10)
             ax.set_ylim(-0.1, 0.5)
@@ -207,7 +227,7 @@ def main():
     for ax in axes[1]:
         ax.set_xlabel("lag (trading days)")
         ax.set_xticks([1, 5, 10, 15, 20])
-    fig.text(0.5, 0.005, "Grey band: ±1.96/√T (95% band under i.i.d.). Daily data, 1990–2020.",
+    fig.text(0.5, 0.005, "Grey band: ±1.96/√T (95%, i.i.d.). Dashed: 95% heteroskedasticity-robust band. Daily data, 1990–2020.",
              ha="center", fontsize=8)
     fig.tight_layout(rect=(0, 0.02, 1, 1))
     fig.savefig(FIG / "acf.png", dpi=200)
@@ -219,7 +239,7 @@ def main():
         k = keys[name]
         ax[0].plot(lags, out[k + "_acf_r2"], "o-", color=colors[name], label=name, ms=4)
         ax[1].plot(lags, out[k + "_acf_abs"], "o-", color=colors[name], label=name, ms=4)
-    ax[0].set_title(r"ACF of $r_t^2$", fontsize=10)
+    ax[0].set_title(r"ACF of $(r_t-\bar r)^2$", fontsize=10)
     ax[1].set_title(r"ACF of $|r_t|$ (robust to outliers)", fontsize=10)
     for a in ax:
         a.axhline(0, color="k", lw=0.6)
@@ -240,6 +260,10 @@ def main():
         g.update({"persistence": pers, "half_life": np.log(0.5) / np.log(pers),
                   "uncond_var": om / (1 - pers), "uncond_ann_vol": np.sqrt(252 * om / (1 - pers))})
         g["s2"] = garch_filter(r - mu, om, a, b)
+        z = (r - mu) / np.sqrt(g["s2"])
+        rz2 = acf(z**2, L)
+        g["z_kurtosis"] = float(stats.kurtosis(z, fisher=False))
+        g["z2_lb"] = ljung_box(rz2, T)
         fits[k] = g
         # arch cross-check
         try:
@@ -294,6 +318,34 @@ def main():
                        "uncond_ann_vol": np.sqrt(252 * om_i / (1 - a_i - b_i))}
     rho_e2 = acf(resid**2, L)
     c["idio_acf_r2"] = rho_e2.tolist()
+
+    # Additive decomposition: sigma2_MSFT,t = b^2 sigma2_m,t + sigma2_u,t (shares in [0,1])
+    s2_sys = beta_full**2 * s2m
+    share_add = s2_sys / (s2_sys + s2e)
+    c["share_add_mean"] = float(share_add.mean())
+    c["share_add_q10_q90"] = [float(np.quantile(share_add, .1)), float(np.quantile(share_add, .9))]
+    c["mkt_part_vol_mean"] = float(np.mean(np.sqrt(252 * s2_sys)))
+    c["firm_vol_mean"] = float(np.mean(np.sqrt(252 * s2e)))
+    c["frac_days_share_above_half"] = float(np.mean(share_add > 0.5))
+    eps_def = {"Full sample 1990-2020": ("1990-01-01", "2020-12-31"),
+               "Dot-com and antitrust 2000-02": ("2000-01-01", "2002-12-31"),
+               "Financial crisis Sep 08-Jun 09": ("2008-09-01", "2009-06-30"),
+               "COVID crash Mar-Apr 2020": ("2020-03-01", "2020-04-30"),
+               "Calm year 2017": ("2017-01-01", "2017-12-31")}
+    c["episodes"] = []
+    for lab, (lo, hi) in eps_def.items():
+        m = ((d.date >= lo) & (d.date <= hi)).to_numpy()
+        c["episodes"].append({"period": lab, "share": float(share_add[m].mean()),
+                              "mkt_part_vol": float(np.mean(np.sqrt(252 * s2_sys[m]))),
+                              "firm_vol": float(np.mean(np.sqrt(252 * s2e[m])))})
+    yr = []
+    for y in sorted(d.date.dt.year.unique()):
+        m = (d.date.dt.year == y).to_numpy()
+        Xy = np.column_stack([np.ones(m.sum()), rm[m]])
+        cy, *_ = np.linalg.lstsq(Xy, ri[m], rcond=None)
+        ey = ri[m] - Xy @ cy
+        yr.append({"year": int(y), "beta": float(cy[1]), "R2": float(1 - ey.var() / ri[m].var())})
+    c["yearly"] = yr
     c["idio_lb_r2"] = ljung_box(rho_e2, T)
 
     # How much of MSFT's conditional-variance *variation* does market variance explain?
@@ -330,19 +382,22 @@ def main():
     out["q1c"] = c
 
     fig, ax = plt.subplots(2, 1, figsize=(10, 5.4), sharex=True)
-    ax[0].plot(d.date, np.sqrt(252 * s2i), color=colors["MSFT"], lw=0.8, label="MSFT total (GARCH)")
-    ax[0].plot(d.date, np.sqrt(252 * beta_roll**2 * s2m), color=colors["Market (CRSP VW)"], lw=0.8,
-               label=r"systematic: $\beta_t\,\sigma_{m,t}$")
-    ax[0].plot(d.date, np.sqrt(252 * s2e), color="#7f7f7f", lw=0.8, label="idiosyncratic (GARCH on residual)")
+    ax[0].plot(d.date, np.sqrt(252 * s2e), color="#7f7f7f", lw=0.7, label=r"firm-specific: $\sigma_{u,t}$ (GARCH on residual)")
+    ax[0].plot(d.date, np.sqrt(252 * s2_sys), color=colors["Market (CRSP VW)"], lw=0.7,
+               label=r"market part: $b\,\sigma_{m,t}$")
     ax[0].set_ylabel("annualized vol (%)")
-    ax[0].legend(fontsize=8, ncol=3)
+    ax[0].legend(fontsize=8, ncol=2, loc="upper left")
     ax[0].grid(alpha=0.3)
-    ax[1].plot(d.date, pd.Series(share_roll).rolling(21).mean(), color="k", lw=0.8)
-    ax[1].axhline(np.nanmean(share_roll), color="k", ls="--", lw=0.6)
-    ax[1].set_ylim(0, 1.2)
-    ax[1].set_ylabel("systematic share of\nMSFT cond. variance")
+    ax[1].plot(d.date, pd.Series(share_add).rolling(21).mean(), color=colors["Market (CRSP VW)"], lw=0.8,
+               label=r"$b^2\sigma^2_{m,t}/(b^2\sigma^2_{m,t}+\sigma^2_{u,t})$, 21-day avg")
+    ys = pd.to_datetime([f"{r_['year']}-01-01" for r_ in yr] + ["2021-01-01"])
+    ax[1].step(ys, [r_["R2"] for r_ in yr] + [yr[-1]["R2"]], where="post", color=colors["MSFT"], lw=1.2,
+               label=r"yearly market-model $R^2$")
+    ax[1].axhline(share_add.mean(), color="k", ls="--", lw=0.6)
+    ax[1].set_ylim(0, 1)
+    ax[1].set_ylabel("market share of\nMSFT variance")
+    ax[1].legend(fontsize=8, loc="upper left")
     ax[1].grid(alpha=0.3)
-    ax[1].set_title(r"$\beta_t^2\sigma^2_{m,t}/\sigma^2_{MSFT,t}$ (21-day avg; dashed = sample mean)", fontsize=9)
     fig.tight_layout()
     fig.savefig(FIG / "msft_decomp.png", dpi=200)
     plt.close(fig)
@@ -376,6 +431,8 @@ def main():
         "VaR95_normal": -(H_MONTH * mu - 1.645 * month_vol), "VaR95_sim": -np.quantile(cum, 0.05),
         "VaR99_sim": -np.quantile(cum, 0.01), "p_drop_10": float(np.mean(cum < -10)),
         "band68": [H_MONTH * mu - month_vol, H_MONTH * mu + month_vol],
+        "band95": [H_MONTH * mu - 1.96 * month_vol, H_MONTH * mu + 1.96 * month_vol],
+        "band95_sim": [float(np.quantile(cum, 0.025)), float(np.quantile(cum, 0.975))],
         "half_life": g["half_life"],
     }
     # what the forecast looked like at the March 2020 peak, for intuition
