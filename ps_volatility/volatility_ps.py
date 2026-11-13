@@ -206,6 +206,52 @@ def fit_gjr_n(r):
     return fit(ll_gjr_n, x0, bnds, r, cons)
 
 
+def ll_garchm(theta, r, gjr=False, tdist=False):
+    """GARCH-in-mean with r_t = mu + lam * sigma2_t + eps_t and a GARCH or GJR variance equation,
+    Gaussian or standardized-t errors. theta = (mu, lam, omega, alpha, [gamma], beta, [nu])."""
+    th = list(theta)
+    mu, lam, omega, alpha = th[:4]
+    i = 4
+    gamma = 0.0
+    if gjr:
+        gamma = th[i]
+        i += 1
+    beta = th[i]
+    nu = th[i + 1] if tdist else None
+    T = r.size
+    s2, eps = np.empty(T), np.empty(T)
+    s2[0] = np.var(r)
+    with np.errstate(over="ignore", invalid="ignore"):
+        for t in range(T):
+            if t > 0:
+                e = eps[t - 1]
+                s2[t] = omega + (alpha + gamma * (e < 0)) * e * e + beta * s2[t - 1]
+            eps[t] = r[t] - mu - lam * s2[t]
+        if not (_valid(s2) and np.all(np.isfinite(eps))) or (tdist and nu <= 2):
+            return np.full(T, PENALTY)
+        if tdist:
+            c = special.gammaln((nu + 1) / 2) - special.gammaln(nu / 2) - 0.5 * np.log(np.pi * (nu - 2))
+            return c - 0.5 * np.log(s2) - 0.5 * (nu + 1) * np.log1p(eps**2 / ((nu - 2) * s2))
+        return -0.5 * (np.log(2 * np.pi) + np.log(s2) + eps**2 / s2)
+
+
+def fit_garchm(r, start, gjr=False, tdist=False):
+    """start = parameters of the matching model without the in-mean term."""
+    st = list(start)
+    x0 = np.array([st[0], 0.0] + st[1:])
+    ib = 4 + int(gjr)  # index of beta
+    bnds = ([(None, None), (None, None), (1e-8, None), (0, 1)] + ([(-1, 1)] if gjr else [])
+            + [(0, 1)] + ([(2.05, 200)] if tdist else []))
+    cons = [{"type": "ineq",
+             "fun": lambda th: 0.99999 - th[3] - (th[4] / 2 if gjr else 0.0) - th[ib]}]
+    if gjr:
+        cons.append({"type": "ineq", "fun": lambda th: th[3] + th[4]})
+    res = fit(lambda th, rr: ll_garchm(th, rr, gjr, tdist), x0, bnds, r, tuple(cons))
+    res["persistence"] = float(res["theta"][3] + (res["theta"][4] / 2 if gjr else 0.0) + res["theta"][ib])
+    res["at_boundary"] = bool(res["persistence"] > 1 - 1e-5 - 1e-9)
+    return res
+
+
 def fit_garchm_n(r, start):
     mu, om, a, b = start
     x0 = np.array([mu, 0.0, om, a, b])
@@ -527,6 +573,12 @@ def main():
         "band95": [H_MONTH * mu - 1.96 * month_vol, H_MONTH * mu + 1.96 * month_vol],
         "band95_sim": [float(np.quantile(cum, 0.025)), float(np.quantile(cum, 0.975))],
         "half_life": g["half_life"],
+        # The simulated returns include the fitted drift mu per day (21 mu per month). Without it:
+        "drift_per_month": float(H_MONTH * mu), "drift_ann": float(252 * mu),
+        "band95_sim_zero_drift": [float(np.quantile(cum - H_MONTH * mu, 0.025)),
+                                  float(np.quantile(cum - H_MONTH * mu, 0.975))],
+        "VaR95_sim_zero_drift": float(-np.quantile(cum - H_MONTH * mu, 0.05)),
+        "VaR99_sim_zero_drift": float(-np.quantile(cum - H_MONTH * mu, 0.01)),
     }
     # what the forecast looked like at the March 2020 peak, for intuition
     ipk = int(np.argmax(g["s2"]))
@@ -648,6 +700,30 @@ def main():
                                    "ll": float(-res_u.fun), "ll_gain": float(-res_u.fun - gj["ll"])}
         out[k + "_gjr"] = {kk: (vv.tolist() if isinstance(vv, np.ndarray) else vv) for kk, vv in gj.items()}
         fits[k + "_gjr_s2"] = s2j
+
+    # ---------------- Q2 continued: GARCH-in-mean under the variance equations of Q3 ----------------
+    # A misspecified variance equation biases lambda, so re-estimate it under each variance equation.
+    gm_tab = {}
+    for name, r in series.items():
+        k = keys[name]
+        L = out[k + "_ll_ladder"]
+        specs = {"GARCH-N": (False, False, fits[k]["theta"]),
+                 "GARCH-t": (False, True, L["garch_t_theta"]),
+                 "GJR-N": (True, False, L["gjr_n_theta"]),
+                 "GJR-t": (True, True, out[k + "_gjr"]["theta"])}
+        gm_tab[k] = {}
+        for lab, (gjr, tdist, st) in specs.items():
+            gmr = fit_garchm(r, st, gjr, tdist)
+            gm_tab[k][lab] = {"lambda": float(gmr["theta"][1]), "se": float(gmr["se"][1]),
+                              "t": float(gmr["theta"][1] / gmr["se"][1]), "ll": float(gmr["ll"]),
+                              "persistence": gmr["persistence"], "at_boundary": gmr["at_boundary"]}
+            if gmr["at_boundary"]:
+                gm_tab[k][lab]["note"] = "variance persistence on the imposed bound; s.e. only indicative"
+    # CAPM benchmark for MSFT under each variance equation: lambda_m * R^2 / b
+    for lab in gm_tab["mkt"]:
+        gm_tab["msft"][lab]["capm_benchmark"] = (gm_tab["mkt"][lab]["lambda"]
+                                                 * out["q1c"]["R2_full"] / out["q1c"]["beta_full"])
+    out["garchm_by_variance_equation"] = gm_tab
 
     # news impact curves, evaluated at a common point: sigma2_{t-1} = sample variance s^2 and shocks
     # in units of the sample s.d. (the long-run variance does not exist when phi -> 1)

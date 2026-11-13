@@ -246,30 +246,28 @@ and yearly market-model $R^2$.}
 
 \subsection{(d) Market risk over the next month (as of 31 December 2020)}
 
-The forecasts come from the fitted market model. The variance forecast $h$ days ahead is
-$\E_t\sigma^2_{t+h}=\bar\sigma^2+(\alpha+\beta)^{h-1}(\sigma^2_{t+1}-\bar\sigma^2)$, and the
+The forecasts come from the fitted GARCH(1,1) for the market. The variance forecast $h$ days
+ahead is $\E_t\sigma^2_{t+h}=\bar\sigma^2+(\alpha+\beta)^{h-1}(\sigma^2_{t+1}-\bar\sigma^2)$,
+so a gap between today's variance and its long-run level halves in about 47 trading days. The
 one-month variance is the sum of the 21 daily forecasts, which gives a one-month standard
-deviation of 3.0\% against 5.0\% at the long-run level. A month of GARCH returns is not exactly
-normal even with normal daily shocks, so the ranges and loss probabilities below come from
-200,000 simulated 21-day paths of the fitted model. The explanation for a reader who has
-never heard of GARCH comes down to three points.
+deviation of 3.0\% against 5.0\% at the long-run level. The ranges and loss probabilities below
+come from 200,000 simulated 21-day paths of the fitted model, because a month of GARCH returns
+is not exactly normal. They set the expected return to zero; the fitted mean of 0.071\% a day,
+about 18\% a year, would shift every figure up by 1.5 percentage points. For a reader who has
+never heard of GARCH, the model says three things.
 
 \begin{itemize}
-\item Market risk is low right now. The model reads the size of recent daily moves and
-concludes that the market is currently running at about 9\% volatility a year, roughly half
-its long-run average of 17\%. The last weeks of 2020 were quiet, and quiet periods in the
-stock market tend to last.
-\item Risk should creep back toward normal, but slowly. The distance between today's risk
-and the long-run level, measured in variance, shrinks by half about every two months, so by
-the end of January the model's estimate of annual volatility has only risen to about 12\%. In
-practice this means a typical month ahead moves the market by about 3\% up or down, against
-about 5\% in an ordinary month. In 19 of 20 simulated months the market ends somewhere between
-a 4.5\% loss and a 7.5\% gain, and a loss of more than 6\% happens in about 1 month out of 100.
-\item These numbers can change in a single day. The forecast is driven by the latest moves,
-so one large drop would raise it immediately. On 17 March 2020 the same model put annual
-volatility near 100\%. The model also treats daily surprises as bell-shaped, while real market
-returns have more extreme days than that, so the true chance of a crash is higher than these
-figures suggest.
+\item Risk is low right now. Recent daily moves have been small, so the model puts the
+market's volatility at about 9\% a year, half its long-run level of 17\%. Calm periods tend to
+last.
+\item It will rise only slowly. Volatility drifts back toward normal over several months and
+reaches only about 12\% by the end of January. A typical month should move the market about
+3\% up or down, against 5\% normally, and 19 months in 20 like this one end between $-6\%$ and
+$+6\%$.
+\item A bad month is still possible. About 1 month in 100 like this one loses more than
+7.5\%, and one large shock would raise all of these numbers at once: in March 2020 the same
+model put volatility near 100\%. Real crashes are also more likely than the model's bell-curve
+shocks allow.
 \end{itemize}
 
 %=====================================================================
@@ -290,12 +288,45 @@ have to be run together: $\sigma_t^2$ is built from $\varepsilon_{t-1}$, and $\v
 is then built from $\sigma_t^2$. For the same reason the information matrix is no longer
 block-diagonal between mean and variance parameters. A misspecified variance equation now
 biases the estimate of $\lambda$, and the two blocks cannot be estimated in separate steps.
-With $g=\sigma^2$ we estimate $\hat\lambda=0.041$ (0.013) for the market, a significant
-positive risk--return trade-off, and 0.012 (0.009) for MSFT. The MSFT estimate is smaller and
-imprecise, but it is close to what CAPM implies. If only market risk is priced, MSFT's premium
-is $b\,\lambda_m\sigma^2_{m,t}$, so its price per unit of total variance should be
-$\lambda_m R^2/b = 0.041\times0.41/1.15\approx0.015$. MSFT's $\lambda$ is lower than the
-market's because most of its variance is firm-specific and earns no premium.
+Because a misspecified variance equation biases $\lambda$, the estimate should come from a
+variance equation the data support. The table below estimates the model with
+$g(\sigma^2)=\sigma^2$ under each of the variance equations compared in Question 3.
+
+\begin{table}[!htb]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Variance equation & Market $\hat\lambda$ & MSFT $\hat\lambda$ & CAPM benchmark for MSFT \\
+\midrule
+GARCH-$N$ & 0.041 (0.013) & 0.012 (0.009) & 0.015 \\
+GARCH-$t$ & 0.034 (0.012) & 0.005 (0.007) & 0.012 \\
+GJR-$N$   & 0.021 (0.011) & 0.008 (0.009) & 0.008 \\
+GJR-$t$   & 0.023 (0.010) & 0.004 (0.007)$^\dagger$ & 0.008 \\
+\bottomrule
+\end{tabular}
+\caption{GARCH-in-mean estimates of $\lambda$ with $g(\sigma^2)=\sigma^2$; robust s.e.\ in
+parentheses. The CAPM benchmark is $\lambda_m R^2/b$ with the market $\hat\lambda$ from the
+same row. $^\dagger$MSFT's variance persistence is on the imposed bound, so this s.e.\ is only
+indicative.}
+\label{tab:garchm}
+\end{table}
+
+For the market, adding the leverage term roughly halves $\hat\lambda$, from 0.041 under the
+symmetric Gaussian GARCH to 0.023 (0.010) under GJR-$t$, the specification Question 3 favors.
+Which days count as high-variance depends on the variance equation, and $\lambda$ is estimated
+from the returns on those days, so the bias described above is large in these data. The
+risk--return trade-off stays positive and is marginally significant under GJR-$t$ ($t=2.4$), so
+the conclusion survives, but it is about half as strong as the symmetric model suggests. This
+is the problem the GJR model was introduced to address; in its first application, allowing for
+asymmetric volatility turned the estimated risk--return relation negative.
+
+For MSFT, $\hat\lambda$ is small and insignificant under every variance equation, and each
+estimate is within one standard error of what CAPM implies. If only market risk is priced,
+MSFT's premium is $b\,\lambda_m\sigma^2_{m,t}$, so its price per unit of total variance should
+be $\lambda_m R^2/b$: 0.015 under the Gaussian GARCH and 0.008 under GJR-$t$, against estimates
+of 0.012 and 0.004. MSFT's $\lambda$ is lower than the market's because most of its variance is
+firm-specific and earns no premium.
 
 Additional return predictors enter the mean equation. With
 $m_t=\mu+\lambda g(\sigma_t^2)+\gamma'X_{t-1}$ the objective is unchanged except that
@@ -455,7 +486,8 @@ asymmetry is weak for MSFT and very strong for the index. A systematic channel f
 Under volatility feedback, news that raises expected market
 volatility raises required returns and pushes prices down at the same moment, and
 correlations across stocks rise in selloffs, so falling prices and rising volatility arrive
-together in the aggregate. Firm-specific news works differently, because a large earnings surprise
+together in the aggregate. Volatility feedback requires a positive price of risk, and
+Question 2 finds one under the GJR-$t$ variance equation ($\hat\lambda=0.023$, s.e.\ 0.010). Firm-specific news works differently, because a large earnings surprise
 raises uncertainty about the firm whether it is good or bad. In the fitted model, the
 $+19.6\%$ move on 19 October 2000 lifted MSFT's annualized volatility from 47\% to 86\% the
 next day. Fitting the same GJR-$t$ model to MSFT's market-model residual
