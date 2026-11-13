@@ -428,10 +428,12 @@ response to good news. Under the model's symmetry assumption the market's persis
 $\phi=0.985$ (s.e.\ 0.0035), apparently well below one, with an implied long-run volatility of
 15.2\%. Both numbers rest on negative shocks carrying half of $\E z^2$, and the data reject
 that. The market's standardized residuals are negatively skewed (skewness $-0.59$), and
-negative shocks carry 58.3\% (s.e.\ 1.2\%) of their squared mass. Because the market's
-$\gamma$ is large, the difference matters: with the sample weight, $\phi=0.9987$ (s.e.\
-0.0041), which is not significantly below one, and the implied long-run volatility is no
-longer pinned down. The GJR-$t$ fit should therefore not be used for the market's long-run
+negative shocks carry 58.3\% (approximate s.e.\ 1.2\%) of their squared mass. Because the
+market's $\gamma$ is large, the difference matters: with the sample weight, $\phi=0.9987$
+(approximate s.e.\ 0.0041), which is not significantly below one. This standard error is a
+plug-in calculation that ignores the covariance between the fitted parameters and the
+estimated weight. Within one standard error $\phi$ reaches one, so the implied long-run
+volatility ranges from about 25\% a year to infinity and is no longer pinned down. The GJR-$t$ fit should therefore not be used for the market's long-run
 volatility level. The GARCH(1,1) estimate of 17.4\%, close to the sample's 17.9\%, is the
 better guide, and a skewed-$t$ density would be the natural next step. For MSFT persistence
 rises to the bound $\phi\le1-10^{-5}$. Under $t$ errors the largest

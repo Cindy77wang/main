@@ -596,14 +596,33 @@ def main():
         phi_emp = a + gm_ * kap + b
         pe = {"kappa": float(kap), "kappa_se": float(se_kap), "z_skew": float(stats.skew(zj)),
               "z_excess_kurtosis": float(stats.kurtosis(zj)), "phi": float(phi_emp)}
+        pe["kappa_se_note"] = "approximate: delta method for a ratio of means, treating z_t as i.i.d."
         if not gj["at_boundary"]:
             w = np.array([0, 0, 1, kap, 1, 0])
             se_phi = float(np.sqrt(w @ gj["V"] @ w + (gm_ * se_kap) ** 2))
+            lo, hi = phi_emp - se_phi, phi_emp + se_phi
             pe.update({"se": se_phi, "t_vs_1": (1 - phi_emp) / se_phi,
-                       "uncond_ann_vol": float(np.sqrt(252 * om / (1 - phi_emp))) if phi_emp < 1 else None})
+                       "se_note": ("approximate plug-in: adds the variance from theta-hat and from "
+                                   "kappa-hat but ignores their covariance"),
+                       "phi_pm_1se": [float(lo), float(hi)],
+                       # omega / (1 - phi) is not reported as a number: within one s.e. phi reaches 1,
+                       # where the long-run variance is infinite, so any plug-in level is unreliable.
+                       "uncond_ann_vol": None,
+                       "uncond_ann_vol_note": (
+                           "not reported: phi is within one s.e. of 1 (interval %.4f to %.4f), so the "
+                           "long-run variance omega/(1-phi) ranges from %s to infinity and is not pinned down"
+                           % (lo, hi, "%.0f%% a year" % np.sqrt(252 * om / (1 - lo)) if lo < 1 else "infinity"))})
         else:
             pe.update({"se": None, "t_vs_1": None, "uncond_ann_vol": None})
         gj["persistence_empirical_weight"] = pe
+        # The headline persistence, half-life, long-run vol and test of phi = 1 above all use kappa = 1/2.
+        sym_rejected = bool(abs(kap - 0.5) > 1.96 * se_kap)
+        gj["symmetry_note"] = (
+            "persistence, half_life, uncond_ann_vol and persistence_inf assume symmetric innovations "
+            "(kappa = 1/2). Sample kappa = %.3f (approx. s.e. %.3f): symmetry is %s, so these figures %s."
+            % (kap, se_kap, "rejected" if sym_rejected else "not rejected",
+               "are conditional on an assumption the data reject" if sym_rejected
+               else "are not sensitive to it"))
         try:
             from arch import arch_model
             am = arch_model(r, mean="Constant", vol="GARCH", p=1, o=1, q=1, dist="t").fit(disp="off")

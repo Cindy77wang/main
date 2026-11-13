@@ -956,10 +956,18 @@
    "z_skew": -0.5896683466497988,
    "z_excess_kurtosis": 2.3181007198780783,
    "phi": 0.9986799738848182,
+   "kappa_se_note": "approximate: delta method for a ratio of means, treating z_t as i.i.d.",
    "se": 0.004082862649444254,
    "t_vs_1": 0.3233089693481265,
-   "uncond_ann_vol": 51.12412183579139
+   "se_note": "approximate plug-in: adds the variance from theta-hat and from kappa-hat but ignores their covariance",
+   "phi_pm_1se": [
+    0.994597111235374,
+    1.0027628365342625
+   ],
+   "uncond_ann_vol": null,
+   "uncond_ann_vol_note": "not reported: phi is within one s.e. of 1 (interval 0.9946 to 1.0028), so the long-run variance omega/(1-phi) ranges from 25% a year to infinity and is not pinned down"
   },
+  "symmetry_note": "persistence, half_life, uncond_ann_vol and persistence_inf assume symmetric innovations (kappa = 1/2). Sample kappa = 0.583 (approx. s.e. 0.012): symmetry is rejected, so these figures are conditional on an assumption the data reject.",
   "arch_check": [
    0.0646707056162581,
    0.013663844364102735,
@@ -1087,10 +1095,12 @@
    "z_skew": 0.0028306506246753415,
    "z_excess_kurtosis": 7.6270399562158815,
    "phi": 0.9981067967006992,
+   "kappa_se_note": "approximate: delta method for a ratio of means, treating z_t as i.i.d.",
    "se": null,
    "t_vs_1": null,
    "uncond_ann_vol": null
   },
+  "symmetry_note": "persistence, half_life, uncond_ann_vol and persistence_inf assume symmetric innovations (kappa = 1/2). Sample kappa = 0.472 (approx. s.e. 0.019): symmetry is not rejected, so these figures are not sensitive to it.",
   "arch_check": [
    0.07259713465631347,
    0.03211529976124794,
