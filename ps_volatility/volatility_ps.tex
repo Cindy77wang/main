@@ -406,19 +406,20 @@ only indicative.}
 \toprule
  & GARCH-$N$ & GARCH-$t$ & GJR-$N$ & GJR-$t$ \\
 \midrule
-Market & $-10{,}110.2$ & $-9{,}927.5$ & $-9{,}999.7$ & $-9{,}832.4$ \\
-MSFT & $-15{,}649.6$ & $-15{,}238.1$ & $-15{,}624.0$ & $-15{,}220.2$ \\
+Market & $-10{,}110.2$ & $-9{,}927.3$ & $-9{,}999.7$ & $-9{,}832.4$ \\
+MSFT & $-15{,}649.6$ & $-15{,}238.3$ & $-15{,}624.5$ & $-15{,}220.2$ \\
 \bottomrule
 \end{tabular}
-\caption{Log likelihood by model, showing how much fat tails and leverage each add.}
+\caption{Log likelihood by model, showing how much fat tails and leverage each add. All four
+likelihoods are coded by hand and use the same variance initialization.}
 \end{table}
 
 Relative to the Gaussian GARCH(1,1), GJR-$t$ raises the log likelihood by 278 for the market
 and 429 for MSFT, far more than two extra parameters could produce by chance. The second
 table shows where the gain comes from. Fat tails matter for both series ($\hat\nu=6.9$ and
-5.3; switching to $t$ errors alone adds 183 and 412), and they matter most for MSFT, whose
+5.3; switching to $t$ errors alone adds 183 and 411), and they matter most for MSFT, whose
 firm-specific jumps are exactly the extreme standardized shocks a normal distribution cannot
-produce. Leverage matters a great deal for the market (it adds 111) and little for MSFT (25).
+produce. Leverage matters a great deal for the market (it adds 110) and little for MSFT (25).
 
 The parameters move in ways that follow from this. For the market, the symmetric coefficient
 falls from 0.112 to an insignificant 0.009 and the asymmetry term $\gamma=0.163$ takes over,

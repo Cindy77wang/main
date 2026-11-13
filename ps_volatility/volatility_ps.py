@@ -56,19 +56,51 @@ def garch_filter(eps, omega, alpha, beta, gamma=0.0, extra=None, s2_0=None):
 #   GJR-t    : (mu, omega, alpha, gamma, beta, nu)
 #   GARCH-M-N: (mu, lam, omega, alpha, beta), r_t = mu + lam*sigma2_t + eps_t
 # ---------------------------------------------------------------------------
+PENALTY = -1e6  # per-observation log likelihood returned at invalid trial points
+
+
+def _valid(s2):
+    """The optimizer can try parameters that make the variance non-positive or explode; such
+    points get a large finite penalty instead of NaN/inf (and no runtime warnings)."""
+    return bool(np.all(np.isfinite(s2)) and np.all(s2 > 0))
+
+
 def ll_garch_n(theta, r):
     mu, omega, alpha, beta = theta
     eps = r - mu
-    s2 = garch_filter(eps, omega, alpha, beta)
+    with np.errstate(over="ignore", invalid="ignore"):
+        s2 = garch_filter(eps, omega, alpha, beta)
+    if not _valid(s2):
+        return np.full(r.size, PENALTY)
     return -0.5 * (np.log(2 * np.pi) + np.log(s2) + eps**2 / s2)
 
 
 def ll_gjr_t(theta, r):
     mu, omega, alpha, gamma, beta, nu = theta
     eps = r - mu
-    s2 = garch_filter(eps, omega, alpha, beta, gamma)
+    with np.errstate(over="ignore", invalid="ignore"):
+        s2 = garch_filter(eps, omega, alpha, beta, gamma)
+    if not _valid(s2) or nu <= 2:
+        return np.full(r.size, PENALTY)
     c = special.gammaln((nu + 1) / 2) - special.gammaln(nu / 2) - 0.5 * np.log(np.pi * (nu - 2))
     return c - 0.5 * np.log(s2) - 0.5 * (nu + 1) * np.log1p(eps**2 / ((nu - 2) * s2))
+
+
+def ll_garch_t(theta, r):
+    """GARCH(1,1) with standardized-t errors: GJR-t with gamma = 0."""
+    mu, omega, alpha, beta, nu = theta
+    return ll_gjr_t([mu, omega, alpha, 0.0, beta, nu], r)
+
+
+def ll_gjr_n(theta, r):
+    """GJR-GARCH(1,1,1) with Gaussian errors."""
+    mu, omega, alpha, gamma, beta = theta
+    eps = r - mu
+    with np.errstate(over="ignore", invalid="ignore"):
+        s2 = garch_filter(eps, omega, alpha, beta, gamma)
+    if not _valid(s2):
+        return np.full(r.size, PENALTY)
+    return -0.5 * (np.log(2 * np.pi) + np.log(s2) + eps**2 / s2)
 
 
 def ll_garchm_n(theta, r):
@@ -77,11 +109,14 @@ def ll_garchm_n(theta, r):
     s2 = np.empty(T)
     eps = np.empty(T)
     s2[0] = np.var(r)
-    for t in range(T):
-        if t > 0:
-            s2[t] = omega + alpha * eps[t - 1] ** 2 + beta * s2[t - 1]
-        eps[t] = r[t] - mu - lam * s2[t]
-    return -0.5 * (np.log(2 * np.pi) + np.log(s2) + eps**2 / s2)
+    with np.errstate(over="ignore", invalid="ignore"):
+        for t in range(T):
+            if t > 0:
+                s2[t] = omega + alpha * eps[t - 1] ** 2 + beta * s2[t - 1]
+            eps[t] = r[t] - mu - lam * s2[t]
+        if not (np.all(np.isfinite(s2)) and np.all(s2 > 0) and np.all(np.isfinite(eps))):
+            return np.full(T, PENALTY)  # explosive trial point during the search
+        return -0.5 * (np.log(2 * np.pi) + np.log(s2) + eps**2 / s2)
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +187,23 @@ def fit_gjr_t(r):
     cons = ({"type": "ineq", "fun": lambda th: 0.99999 - th[2] - th[3] / 2 - th[4]},
             {"type": "ineq", "fun": lambda th: th[2] + th[3]})  # positivity after a negative shock
     return fit(ll_gjr_t, x0, bnds, r, cons)
+
+
+def fit_garch_t(r):
+    v = np.var(r)
+    x0 = np.array([r.mean(), 0.03 * v, 0.07, 0.90, 7.0])
+    bnds = [(None, None), (1e-8, None), (0, 1), (0, 1), (2.05, 200)]
+    cons = ({"type": "ineq", "fun": lambda th: 0.99999 - th[2] - th[3]},)
+    return fit(ll_garch_t, x0, bnds, r, cons)
+
+
+def fit_gjr_n(r):
+    v = np.var(r)
+    x0 = np.array([r.mean(), 0.03 * v, 0.03, 0.08, 0.90])
+    bnds = [(None, None), (1e-8, None), (0, 1), (-1, 1), (0, 1)]
+    cons = ({"type": "ineq", "fun": lambda th: 0.99999 - th[2] - th[3] / 2 - th[4]},
+            {"type": "ineq", "fun": lambda th: th[2] + th[3]})
+    return fit(ll_gjr_n, x0, bnds, r, cons)
 
 
 def fit_garchm_n(r, start):
@@ -267,6 +319,11 @@ def main():
     fig.savefig(FIG / "acf_compare.png", dpi=200)
     plt.close(fig)
 
+    # Largest MSFT moves and the market's move on the same day (firm-specific vs market days)
+    top = np.argsort(-np.abs(series["MSFT"]))[:5]
+    out["msft_top5_moves"] = [{"date": str(d.date.iloc[i].date()), "msft": float(series["MSFT"][i]),
+                               "market": float(series["Market (CRSP VW)"][i])} for i in top]
+
     # ---------------- Q1(b) GARCH(1,1) ----------------
     fits = {}
     for name, r in series.items():
@@ -284,7 +341,7 @@ def main():
         g["s2"] = garch_filter(r - mu, om, a, b)
         z = (r - mu) / np.sqrt(g["s2"])
         rz2 = acf(z**2, L)
-        g["z_kurtosis"] = float(stats.kurtosis(z, fisher=False))
+        g["z_excess_kurtosis"] = float(stats.kurtosis(z, fisher=True))
         g["z2_lb"] = ljung_box(rz2, T)
         fits[k] = g
         # arch cross-check
@@ -292,6 +349,8 @@ def main():
             from arch import arch_model
             am = arch_model(r, mean="Constant", vol="GARCH", p=1, q=1, dist="normal").fit(disp="off")
             g["arch_check"] = am.params.to_numpy().tolist() + [am.loglikelihood]
+        except ImportError:
+            g["arch_check"] = "arch not installed (optional cross-check only)"
         except Exception as e:  # pragma: no cover
             g["arch_check"] = str(e)
         out[k + "_garch"] = {kk: (vv.tolist() if isinstance(vv, np.ndarray) and kk != "s2" else vv)
@@ -390,7 +449,10 @@ def main():
     def ll_garchx(theta, r, q=s2m):
         mu, omega, alpha, beta, delta = theta
         eps = r - mu
-        s2 = garch_filter(eps, omega, alpha, beta, extra=np.r_[0, delta * q[1:]])
+        with np.errstate(over="ignore", invalid="ignore"):
+            s2 = garch_filter(eps, omega, alpha, beta, extra=np.r_[0, delta * q[1:]])
+        if not _valid(s2):
+            return np.full(r.size, PENALTY)
         return -0.5 * (np.log(2 * np.pi) + np.log(s2) + eps**2 / s2)
     gx = fit(ll_garchx, np.r_[fits["msft"]["theta"], 0.05],
              [(None, None), (1e-8, None), (0, 1), (0, 1), (0, None)], ri,
@@ -546,18 +608,16 @@ def main():
             from arch import arch_model
             am = arch_model(r, mean="Constant", vol="GARCH", p=1, o=1, q=1, dist="t").fit(disp="off")
             gj["arch_check"] = am.params.to_numpy().tolist() + [am.loglikelihood]
+        except ImportError:
+            gj["arch_check"] = "arch not installed (optional cross-check only)"
         except Exception as e:  # pragma: no cover
             gj["arch_check"] = str(e)
-        # Gaussian GJR and t-GARCH as intermediate steps (which change drives the fit?)
-        try:
-            from arch import arch_model
-            out[k + "_ll_ladder"] = {
-                "garch_n": fits[k]["ll"],
-                "garch_t": arch_model(r, vol="GARCH", p=1, q=1, dist="t").fit(disp="off").loglikelihood,
-                "gjr_n": arch_model(r, vol="GARCH", p=1, o=1, q=1, dist="normal").fit(disp="off").loglikelihood,
-                "gjr_t": gj["ll"]}
-        except Exception:
-            pass
+        # Gaussian GJR and t-GARCH as intermediate steps (which change drives the fit?).
+        # All four likelihoods are coded here and use the same variance initialization.
+        gt, gn = fit_garch_t(r), fit_gjr_n(r)
+        out[k + "_ll_ladder"] = {"garch_n": fits[k]["ll"], "garch_t": gt["ll"], "gjr_n": gn["ll"],
+                                 "gjr_t": gj["ll"],
+                                 "garch_t_theta": gt["theta"].tolist(), "gjr_n_theta": gn["theta"].tolist()}
         if gj["at_boundary"]:
             v = np.var(r)
             res_u = optimize.minimize(lambda th: -np.sum(ll_gjr_t(th, r)), gj["theta"], method="SLSQP",
